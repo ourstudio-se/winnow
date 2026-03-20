@@ -1,0 +1,198 @@
+const std = @import("std");
+const net = std.net;
+const http = std.http;
+const Allocator = std.mem.Allocator;
+const otlp = @import("proto/opentelemetry/proto/collector/trace/v1.pb.zig");
+const logs_otlp = @import("proto/opentelemetry/proto/collector/logs/v1.pb.zig");
+const Quickwit = @import("quickwit.zig").Quickwit;
+const otel_index = @import("otel_index.zig");
+const otel_logs_index = @import("otel_logs_index.zig");
+const servicegraph_index = @import("servicegraph_index.zig");
+const ingest = @import("ingest.zig");
+const api = @import("api.zig");
+
+const IndexConfig = struct {
+    traces: []const u8,
+    logs: []const u8,
+    servicegraph: []const u8,
+};
+
+const Context = struct {
+    qw: Quickwit,
+    allocator: Allocator,
+    indexes: IndexConfig,
+    allowed_indexes: [3][]const u8,
+};
+
+const default_quickwit_url = "http://localhost:7280";
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Initialize Quickwit client
+    const quickwit_url = std.process.getEnvVarOwned(allocator, "QUICKWIT_URL") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => try allocator.dupe(u8, default_quickwit_url),
+        else => return err,
+    };
+    defer allocator.free(quickwit_url);
+
+    // Read configurable index names
+    const traces_index = std.process.getEnvVarOwned(allocator, "OTEL_TRACES_INDEX") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => try allocator.dupe(u8, otel_index.index_id),
+        else => return err,
+    };
+    defer allocator.free(traces_index);
+
+    const logs_index = std.process.getEnvVarOwned(allocator, "OTEL_LOGS_INDEX") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => try allocator.dupe(u8, otel_logs_index.index_id),
+        else => return err,
+    };
+    defer allocator.free(logs_index);
+
+    const sg_index = std.process.getEnvVarOwned(allocator, "SERVICEGRAPH_INDEX") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => try allocator.dupe(u8, servicegraph_index.index_id),
+        else => return err,
+    };
+    defer allocator.free(sg_index);
+
+    var http_client: http.Client = .{ .allocator = allocator };
+    defer http_client.deinit();
+
+    const qw = Quickwit.init(&http_client, quickwit_url);
+
+    std.log.info("connecting to Quickwit at {s}", .{quickwit_url});
+    {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        qw.ensureIndex(arena.allocator(), traces_index, otel_index.config) catch |err| {
+            std.log.err("failed to ensure traces index: {}", .{err});
+            return err;
+        };
+        qw.ensureIndex(arena.allocator(), logs_index, otel_logs_index.config) catch |err| {
+            std.log.err("failed to ensure logs index: {}", .{err});
+            return err;
+        };
+        qw.ensureIndex(arena.allocator(), sg_index, servicegraph_index.config) catch |err| {
+            std.log.err("failed to ensure servicegraph index: {}", .{err});
+            return err;
+        };
+    }
+
+    // Start HTTP server
+    const address = net.Address.parseIp("0.0.0.0", 8080) catch unreachable;
+    var server = try address.listen(.{
+        .reuse_address = true,
+    });
+    defer server.deinit();
+
+    std.log.info("listening on http://0.0.0.0:8080", .{});
+
+    const ctx = Context{
+        .qw = qw,
+        .allocator = allocator,
+        .indexes = .{
+            .traces = traces_index,
+            .logs = logs_index,
+            .servicegraph = sg_index,
+        },
+        .allowed_indexes = .{ traces_index, logs_index, sg_index },
+    };
+
+    while (true) {
+        const conn = try server.accept();
+        _ = std.Thread.spawn(.{}, handleConnection, .{ conn, &ctx }) catch |err| {
+            std.log.err("failed to spawn thread: {}", .{err});
+            continue;
+        };
+    }
+}
+
+fn handleConnection(conn: net.Server.Connection, ctx: *const Context) void {
+    defer conn.stream.close();
+
+    var read_buf: [8192]u8 = undefined;
+    var write_buf: [8192]u8 = undefined;
+    var reader = net.Stream.Reader.init(conn.stream, &read_buf);
+    var writer = net.Stream.Writer.init(conn.stream, &write_buf);
+    var http_server = http.Server.init(reader.interface(), &writer.interface);
+
+    var request = http_server.receiveHead() catch |err| {
+        std.log.err("failed to receive request: {}", .{err});
+        return;
+    };
+
+    // Per-request arena
+    var arena = std.heap.ArenaAllocator.init(ctx.allocator);
+    defer arena.deinit();
+
+    // Route
+    if (std.mem.eql(u8, request.head.target, "/v1/traces")) {
+        if (request.head.method == .POST) {
+            ingest.handleTraces(&request, arena.allocator(), ctx.qw, ctx.indexes.traces, ctx.indexes.servicegraph) catch |err| {
+                std.log.err("ingest error: {}", .{err});
+            };
+        } else {
+            request.respond("Method Not Allowed\n", .{
+                .status = .method_not_allowed,
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = "text/plain" },
+                },
+            }) catch {};
+        }
+    } else if (std.mem.eql(u8, request.head.target, "/v1/logs")) {
+        if (request.head.method == .POST) {
+            ingest.handleLogs(&request, arena.allocator(), ctx.qw, ctx.indexes.logs) catch |err| {
+                std.log.err("log ingest error: {}", .{err});
+            };
+        } else {
+            request.respond("Method Not Allowed\n", .{
+                .status = .method_not_allowed,
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = "text/plain" },
+                },
+            }) catch {};
+        }
+    } else if (std.mem.startsWith(u8, request.head.target, "/api/")) {
+        api.handleApi(&request, arena.allocator(), ctx.qw, &ctx.allowed_indexes) catch |err| {
+            std.log.err("api error: {}", .{err});
+        };
+    } else {
+        handleStatic(&request) catch |err| {
+            std.log.err("static error: {}", .{err});
+        };
+    }
+}
+
+fn handleStatic(request: *http.Server.Request) !void {
+    try request.respond("TODO: serve frontend assets\n", .{
+        .extra_headers = &.{
+            .{ .name = "content-type", .value = "text/plain" },
+        },
+    });
+}
+
+test "basic server compiles" {
+    _ = &handleStatic;
+}
+
+test "otlp proto types are importable" {
+    _ = otlp.ExportTraceServiceRequest;
+    _ = otlp.ExportTraceServiceResponse;
+}
+
+test "otlp log proto types are importable" {
+    _ = logs_otlp.ExportLogsServiceRequest;
+    _ = logs_otlp.ExportLogsServiceResponse;
+}
+
+test {
+    _ = Quickwit;
+    _ = otel_index;
+    _ = otel_logs_index;
+    _ = servicegraph_index;
+    _ = @import("servicegraph.zig");
+    _ = ingest;
+    _ = api;
+}

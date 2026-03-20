@@ -1,0 +1,10 @@
+result
+.direnv
+node_modules
+dist
+zig-cache
+zig-out
+.zig-cache
+
+# Generated protobuf code (regenerate with: zig build gen-proto)
+backend/src/proto/
