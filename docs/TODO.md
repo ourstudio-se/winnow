@@ -69,16 +69,30 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Integration tests: trace search, trace detail by ID, log search, service graph search, unknown index 404, index list
 - [x] Verify: `nix build .#checks.x86_64-linux.integration` passes
 
-## Phase 6: Frontend
+## Phase 6a: Frontend Scaffold
 
-- [ ] Scaffold React app in `frontend/` — Vite + TypeScript + pnpm
-- [ ] Install and configure shadcn/ui
-- [ ] Pick visualization lib (ECharts or React Flow) and add it
-- [ ] **Service Map view** — fetch `/api/graph`, render nodes (services) and edges (calls) with request rate labels
-- [ ] **Traces view** — search bar + table listing traces from `/api/traces`, click to expand span timeline
-- [ ] **Logs view** — search bar + table listing logs from `/api/logs`, link to associated trace
-- [ ] Basic layout: sidebar with Service Map / Traces / Logs nav, main content area
+- [x] Scaffold React app in `frontend/` — Vite + TypeScript + pnpm
+- [x] Install and configure shadcn/ui (New York/Nova preset, Zinc palette, Tailwind v4)
+- [x] Install React Router v7 and @xyflow/react
+- [x] Configure Vite dev proxy (`/api` and `/v1` → `localhost:8080`)
+- [x] Create typed API client (`src/lib/api.ts`) — `search()`, `listIndexes()`
+- [x] Create layout with sidebar nav ("Winnow" branding, 3 nav items with Lucide icons)
+- [x] Create router with 3 routes: `/` (Service Map), `/traces`, `/logs`
+- [x] Create placeholder views for all 3 routes
+- [x] Dark mode only (`<html class="dark">`)
+- [x] Verify: `pnpm build` succeeds with no TS errors
+
+## Phase 6b–6d: Frontend Views (TODO)
+
+- [x] **Service Map view** — fetch service graph, render with React Flow
+- [ ] **Traces view** — search bar + table listing traces, click to expand span timeline
+- [ ] **Logs view** — search bar + table listing logs, link to associated trace
 - [ ] Verify: can see service map with real edges, click through to traces and logs
+
+## Dev Tooling
+
+- [x] `docker-compose.yml` — Quickwit v0.9.0-rc with persistent volume (ports 7290/7291)
+- [x] `scripts/generate-data.py` — OTel data generator simulating 5-service topology with ~10% error injection
 
 ## Phase 7: Single Binary Packaging
 

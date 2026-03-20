@@ -48,6 +48,9 @@
             grpcurl
             curl
             jq
+
+            # Data generation
+            self.packages.${system}.generate-data
           ];
 
           shellHook = ''
@@ -63,6 +66,16 @@
             telemetry-experiment = self.packages.${system}.default;
           };
         };
+
+        packages.generate-data = let
+          py = pkgs.python3.withPackages (ps: with ps; [
+            opentelemetry-api
+            opentelemetry-sdk
+            opentelemetry-exporter-otlp-proto-http
+          ]);
+        in pkgs.writeShellScriptBin "generate-data" ''
+          exec ${py}/bin/python3 ${./scripts/generate-data.py} "$@"
+        '';
 
         # TODO: packages.docker-image = OCI image
       }
