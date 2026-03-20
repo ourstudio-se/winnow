@@ -30,15 +30,13 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Verify: point an OTel SDK (e.g. `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8080`) at the server, traces appear in Quickwit
 - [x] NixOS VM integration test (`nix build .#checks.x86_64-linux.integration`) — spins up Quickwit in Docker, sends traces via Python OTel SDK, verifies spans in Quickwit search
 
-## Phase 4: Service Graph Computation
+## Phase 4: Service Graph (derived from traces)
 
-- [x] Define Quickwit index schema for `servicegraph` (fields: `source`, `dest`, `operation`, `span_kind`, `duration_ms`, `is_error`, `timestamp`, `trace_id`)
-- [x] Create index on startup if it doesn't exist
-- [x] After ingesting a trace batch, extract service-to-service edges from CLIENT/PRODUCER spans (dest resolved via `peer.service` → `server.address` → `net.peer.name` → `http.host` fallback chain)
-- [x] Per-span edge documents (not pre-aggregated) — aggregation at query time via Quickwit
-- [x] Edge ingest is fire-and-forget (failures logged, don't fail trace ingest)
-- [x] Unit tests for edge extraction
-- [x] Verify: NixOS VM integration test passes with servicegraph assertions
+- [x] ~~Servicegraph index removed~~ — service map now queries the traces index directly
+- [x] Frontend derives edges from CLIENT/PRODUCER spans (span_kind 3/4) at query time
+- [x] Destination resolved client-side via `peer.service` → `server.address` → `net.peer.name` → `http.host` fallback chain
+- [x] FilterBar uses native Quickwit `start_timestamp`/`end_timestamp` instead of nanosecond range queries
+- [x] Integration test verifies CLIENT spans with `peer.service` attribute
 
 ## Phase 4b: OTLP Log Ingest
 
@@ -47,7 +45,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Create `src/otel_logs_index.zig` — otel-logs-v0_9 index schema
 - [x] Add `LogDoc` struct and `transformLogsToNdjson` to `ingest.zig`
 - [x] Add `handleLogs` handler in `ingest.zig`
-- [x] Make index names configurable via env vars (`OTEL_TRACES_INDEX`, `OTEL_LOGS_INDEX`, `SERVICEGRAPH_INDEX`)
+- [x] Make index names configurable via env vars (`OTEL_TRACES_INDEX`, `OTEL_LOGS_INDEX`)
 - [x] Add `IndexConfig` struct to `main.zig`, pass index IDs to handlers
 - [x] Add `POST /v1/logs` route
 - [x] Ensure logs index exists on startup
@@ -61,12 +59,12 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Create `src/api.zig` — thin proxy module (~100 lines)
   - `POST /api/v1/{index}/search` — validate index in allowed list, forward to Quickwit, return response verbatim
   - `GET /api/v1/indexes` — return JSON array of allowed index IDs
-  - Index allowlist restricts access to `otel-traces-v0_9`, `otel-logs-v0_9`, `servicegraph`
+  - Index allowlist restricts access to `otel-traces-v0_9`, `otel-logs-v0_9`
   - Unknown indexes get 404, wrong methods get 405
 - [x] Wire `api.zig` into `main.zig` — replace `handleApi` stub, pass `allowed_indexes` from `IndexConfig`
 - [x] Unit tests: index ID extraction, allowed-index validation
 - [x] Verify: `zig build test` passes (26/26 tests)
-- [x] Integration tests: trace search, trace detail by ID, log search, service graph search, unknown index 404, index list
+- [x] Integration tests: trace search, trace detail by ID, log search, unknown index 404, index list
 - [x] Verify: `nix build .#checks.x86_64-linux.integration` passes
 
 ## Phase 6a: Frontend Scaffold
@@ -86,6 +84,9 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 
 - [x] **Service Map view** — fetch service graph, render with React Flow
 - [x] **Service Map filter bar** — metadata-driven field filters + time range picker
+- [x] **FilterBar redesign** — "Add filter" chip flow with field picker popover, nested JSON key discovery via doc sampling, dot-escaping for Quickwit queries
+- [x] **FilterBar value autocomplete** — terms aggregation populates suggested values when selecting a field, combobox-style picker with search filtering and custom value entry
+- [x] **FilterBar base query scoping** — autocomplete (terms agg + field discovery) scoped to the view's base query (e.g. CLIENT/PRODUCER spans only on service map)
 - [ ] **Traces view** — search bar + table listing traces, click to expand span timeline
 - [ ] **Logs view** — search bar + table listing logs, link to associated trace
 - [ ] Verify: can see service map with real edges, click through to traces and logs
@@ -97,7 +98,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] `extractMetadataIndex` extractor + `handleIndexMetadata` handler in `api.zig`
 - [x] Unit tests for `extractMetadataIndex` (valid paths, edge cases)
 - [x] `getIndexMetadata()` client function in `frontend/src/lib/api.ts`
-- [ ] Verify: manual test with running Quickwit (`curl /api/v1/indexes/servicegraph`)
+- [ ] Verify: manual test with running Quickwit (`curl /api/v1/indexes/otel-traces-v0_9`)
 
 ## Dev Tooling
 

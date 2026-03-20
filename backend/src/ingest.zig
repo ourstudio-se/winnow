@@ -10,7 +10,6 @@ const logs_pb = @import("proto/opentelemetry/proto/logs/v1.pb.zig");
 const common_pb = @import("proto/opentelemetry/proto/common/v1.pb.zig");
 const resource_pb = @import("proto/opentelemetry/proto/resource/v1.pb.zig");
 const Quickwit = @import("quickwit.zig").Quickwit;
-const servicegraph = @import("servicegraph.zig");
 
 const log = std.log.scoped(.ingest);
 
@@ -71,7 +70,6 @@ pub fn handleTraces(
     arena: Allocator,
     qw: Quickwit,
     traces_index_id: []const u8,
-    servicegraph_index_id: []const u8,
 ) HandleError!void {
     // 1. Read request body
     var body_buf: [8192]u8 = undefined;
@@ -102,18 +100,7 @@ pub fn handleTraces(
         };
     }
 
-    // 5. Extract and ingest service graph edges (best-effort)
-    if (servicegraph.extractEdges(arena, otlp_request)) |edges| {
-        if (edges.len > 0) {
-            qw.ingest(arena, servicegraph_index_id, edges) catch |err| {
-                log.warn("servicegraph ingest failed: {}", .{err});
-            };
-        }
-    } else |err| {
-        log.warn("servicegraph edge extraction failed: {}", .{err});
-    }
-
-    // 6. Respond with empty ExportTraceServiceResponse (encodes to zero bytes)
+    // 5. Respond with empty ExportTraceServiceResponse (encodes to zero bytes)
     try request.respond("", .{
         .extra_headers = &.{
             .{ .name = "content-type", .value = "application/x-protobuf" },

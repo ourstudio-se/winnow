@@ -8,7 +8,6 @@ pub const config =
     \\  "index_id": "otel-traces-v0_9",
     \\  "doc_mapping": {
     \\    "mode": "strict",
-    \\    "timestamp_field": "span_start_timestamp_nanos",
     \\    "tag_fields": ["service_name"],
     \\    "field_mappings": [
     \\      {
@@ -38,7 +37,8 @@ pub const config =
     \\      {
     \\        "name": "resource_attributes",
     \\        "type": "json",
-    \\        "tokenizer": "raw"
+    \\        "tokenizer": "raw",
+    \\        "fast": true
     \\      },
     \\      {
     \\        "name": "resource_dropped_attributes_count",
@@ -58,17 +58,12 @@ pub const config =
     \\      },
     \\      {
     \\        "name": "span_start_timestamp_nanos",
-    \\        "type": "datetime",
-    \\        "input_formats": ["unix_timestamp_nanos"],
-    \\        "output_format": "unix_timestamp_nanos",
-    \\        "fast": true,
-    \\        "fast_precision": "milliseconds"
+    \\        "type": "u64",
+    \\        "fast": true
     \\      },
     \\      {
     \\        "name": "span_end_timestamp_nanos",
-    \\        "type": "datetime",
-    \\        "input_formats": ["unix_timestamp_nanos"],
-    \\        "output_format": "unix_timestamp_nanos",
+    \\        "type": "u64",
     \\        "fast": false
     \\      },
     \\      {
@@ -79,7 +74,8 @@ pub const config =
     \\      {
     \\        "name": "span_attributes",
     \\        "type": "json",
-    \\        "tokenizer": "raw"
+    \\        "tokenizer": "raw",
+    \\        "fast": true
     \\      },
     \\      {
     \\        "name": "span_dropped_attributes_count",
@@ -98,7 +94,8 @@ pub const config =
     \\      },
     \\      {
     \\        "name": "span_status",
-    \\        "type": "json"
+    \\        "type": "json",
+    \\        "fast": true
     \\      },
     \\      {
     \\        "name": "events",

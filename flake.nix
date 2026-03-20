@@ -51,9 +51,11 @@
 
             # Data generation
             self.packages.${system}.generate-data
+            self.packages.${system}.nuke-indices
           ];
 
           shellHook = ''
+            export QUICKWIT_URL=http://localhost:7290
             echo "telemetry-experiment dev shell"
             echo "  zig:  $(zig version)"
             echo "  node: $(node --version)"
@@ -75,6 +77,10 @@
           ]);
         in pkgs.writeShellScriptBin "generate-data" ''
           exec ${py}/bin/python3 ${./scripts/generate-data.py} "$@"
+        '';
+
+        packages.nuke-indices = pkgs.writeShellScriptBin "nuke-indices" ''
+          exec ${pkgs.python3}/bin/python3 ${./scripts/nuke-indices.py} "$@"
         '';
 
         # TODO: packages.docker-image = OCI image

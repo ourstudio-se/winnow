@@ -8,7 +8,6 @@ pub const config =
     \\  "index_id": "otel-logs-v0_9",
     \\  "doc_mapping": {
     \\    "mode": "strict",
-    \\    "timestamp_field": "timestamp_nanos",
     \\    "tag_fields": ["service_name"],
     \\    "field_mappings": [
     \\      {

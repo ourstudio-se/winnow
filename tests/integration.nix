@@ -237,18 +237,21 @@ in
             "Root span not found"
         )
 
-        # Verify service graph edges
-        sg = wait_for_hits_index(
-            "servicegraph",
-            "source:test-service",
+        # Verify CLIENT spans can derive service graph edges
+        client_spans = wait_for_hits(
+            "span_kind:3 AND "
+            "service_name:test-service",
             1,
         )
-        hits = sg["hits"]
+        hits = client_spans["hits"]
         assert any(
-            h["dest"] == "backend-db"
+            h.get("span_attributes", {}).get(
+                "peer.service"
+            ) == "backend-db"
             for h in hits
         ), (
-            f"Expected edge to backend-db, "
+            f"Expected CLIENT span with "
+            f"peer.service=backend-db, "
             f"got: {hits}"
         )
 
@@ -319,20 +322,6 @@ in
             f"got {proxy_logs['num_hits']}"
         )
 
-        # Service graph search via proxy
-        sg_proxy = json.loads(machine.succeed(
-            "curl -sf "
-            "http://localhost:8080"
-            "/api/v1/servicegraph/search "
-            "-H 'Content-Type: application/json' "
-            "-d '{\"query\": \"*\", "
-            "\"max_hits\": 100}'"
-        ))
-        assert sg_proxy["num_hits"] >= 1, (
-            f"Expected >= 1 edge, "
-            f"got {sg_proxy['num_hits']}"
-        )
-
         # Verify unknown index is rejected (404)
         result = machine.succeed(
             "curl -s -o /dev/null "
@@ -355,6 +344,6 @@ in
         ))
         assert "otel-traces-v0_9" in indexes
         assert "otel-logs-v0_9" in indexes
-        assert "servicegraph" in indexes
+        assert "servicegraph" not in indexes
       '';
   }

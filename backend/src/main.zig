@@ -7,21 +7,19 @@ const logs_otlp = @import("proto/opentelemetry/proto/collector/logs/v1.pb.zig");
 const Quickwit = @import("quickwit.zig").Quickwit;
 const otel_index = @import("otel_index.zig");
 const otel_logs_index = @import("otel_logs_index.zig");
-const servicegraph_index = @import("servicegraph_index.zig");
 const ingest = @import("ingest.zig");
 const api = @import("api.zig");
 
 const IndexConfig = struct {
     traces: []const u8,
     logs: []const u8,
-    servicegraph: []const u8,
 };
 
 const Context = struct {
     qw: Quickwit,
     allocator: Allocator,
     indexes: IndexConfig,
-    allowed_indexes: [3][]const u8,
+    allowed_indexes: [2][]const u8,
 };
 
 const default_quickwit_url = "http://localhost:7280";
@@ -51,12 +49,6 @@ pub fn main() !void {
     };
     defer allocator.free(logs_index);
 
-    const sg_index = std.process.getEnvVarOwned(allocator, "SERVICEGRAPH_INDEX") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => try allocator.dupe(u8, servicegraph_index.index_id),
-        else => return err,
-    };
-    defer allocator.free(sg_index);
-
     var http_client: http.Client = .{ .allocator = allocator };
     defer http_client.deinit();
 
@@ -72,10 +64,6 @@ pub fn main() !void {
         };
         qw.ensureIndex(arena.allocator(), logs_index, otel_logs_index.config) catch |err| {
             std.log.err("failed to ensure logs index: {}", .{err});
-            return err;
-        };
-        qw.ensureIndex(arena.allocator(), sg_index, servicegraph_index.config) catch |err| {
-            std.log.err("failed to ensure servicegraph index: {}", .{err});
             return err;
         };
     }
@@ -95,9 +83,8 @@ pub fn main() !void {
         .indexes = .{
             .traces = traces_index,
             .logs = logs_index,
-            .servicegraph = sg_index,
         },
-        .allowed_indexes = .{ traces_index, logs_index, sg_index },
+        .allowed_indexes = .{ traces_index, logs_index },
     };
 
     while (true) {
@@ -130,7 +117,7 @@ fn handleConnection(conn: net.Server.Connection, ctx: *const Context) void {
     // Route
     if (std.mem.eql(u8, request.head.target, "/v1/traces")) {
         if (request.head.method == .POST) {
-            ingest.handleTraces(&request, arena.allocator(), ctx.qw, ctx.indexes.traces, ctx.indexes.servicegraph) catch |err| {
+            ingest.handleTraces(&request, arena.allocator(), ctx.qw, ctx.indexes.traces) catch |err| {
                 std.log.err("ingest error: {}", .{err});
             };
         } else {
@@ -191,8 +178,6 @@ test {
     _ = Quickwit;
     _ = otel_index;
     _ = otel_logs_index;
-    _ = servicegraph_index;
-    _ = @import("servicegraph.zig");
     _ = ingest;
     _ = api;
 }

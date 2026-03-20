@@ -196,8 +196,8 @@ test "extractMetadataIndex valid paths" {
         extractMetadataIndex("/api/v1/indexes/otel-traces-v0_9").?,
     );
     try std.testing.expectEqualStrings(
-        "servicegraph",
-        extractMetadataIndex("/api/v1/indexes/servicegraph").?,
+        "otel-logs-v0_9",
+        extractMetadataIndex("/api/v1/indexes/otel-logs-v0_9").?,
     );
 }
 
@@ -214,8 +214,8 @@ test "extractSearchIndex valid paths" {
         extractSearchIndex("/api/v1/otel-traces-v0_9/search").?,
     );
     try std.testing.expectEqualStrings(
-        "servicegraph",
-        extractSearchIndex("/api/v1/servicegraph/search").?,
+        "otel-logs-v0_9",
+        extractSearchIndex("/api/v1/otel-logs-v0_9/search").?,
     );
     try std.testing.expectEqualStrings(
         "my-custom-index",
@@ -231,7 +231,7 @@ test "extractSearchIndex invalid paths" {
 }
 
 test "allowed index validation" {
-    const allowed = &[_][]const u8{ "otel-traces-v0_9", "otel-logs-v0_9", "servicegraph" };
+    const allowed = &[_][]const u8{ "otel-traces-v0_9", "otel-logs-v0_9" };
 
     // Known indexes should be accepted
     for (allowed) |idx| {
