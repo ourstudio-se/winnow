@@ -85,9 +85,19 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 ## Phase 6b–6d: Frontend Views (TODO)
 
 - [x] **Service Map view** — fetch service graph, render with React Flow
+- [x] **Service Map filter bar** — metadata-driven field filters + time range picker
 - [ ] **Traces view** — search bar + table listing traces, click to expand span timeline
 - [ ] **Logs view** — search bar + table listing logs, link to associated trace
 - [ ] Verify: can see service map with real edges, click through to traces and logs
+
+## Index Metadata Endpoint
+
+- [x] `GET /api/v1/indexes/{index}` backend route — proxies Quickwit index metadata
+- [x] `getIndexMetadata()` in `quickwit.zig` — GET request, returns raw response + status
+- [x] `extractMetadataIndex` extractor + `handleIndexMetadata` handler in `api.zig`
+- [x] Unit tests for `extractMetadataIndex` (valid paths, edge cases)
+- [x] `getIndexMetadata()` client function in `frontend/src/lib/api.ts`
+- [ ] Verify: manual test with running Quickwit (`curl /api/v1/indexes/servicegraph`)
 
 ## Dev Tooling
 

@@ -134,6 +134,28 @@ pub const Quickwit = struct {
         return response_buf.writer.buffer[0..response_buf.writer.end];
     }
 
+    /// Returns the raw index metadata response from Quickwit.
+    /// GET /api/v1/indexes/{index_id} — no request body.
+    pub fn getIndexMetadata(self: Quickwit, arena: Allocator, index_id: []const u8) error{ OutOfMemory, HttpError }!SearchResult {
+        const url = try std.fmt.allocPrint(arena, "{s}/api/v1/indexes/{s}", .{ self.base_url, index_id });
+
+        var response_buf: Io.Writer.Allocating = .init(arena);
+
+        const result = self.http_client.fetch(.{
+            .location = .{ .url = url },
+            .method = .GET,
+            .response_writer = &response_buf.writer,
+        }) catch |err| {
+            log.err("getIndexMetadata: {}", .{err});
+            return error.HttpError;
+        };
+
+        return .{
+            .body = response_buf.writer.buffer[0..response_buf.writer.end],
+            .status = result.status,
+        };
+    }
+
     /// Like search(), but returns the raw response body and HTTP status
     /// instead of failing on non-200. Used by the search proxy to forward
     /// Quickwit's response (including errors) to the frontend.
