@@ -21,6 +21,9 @@ export function TracesView() {
     () => searchParams.get("fingerprint"),
   );
   const [fingerprintLabel, setFingerprintLabel] = useState<string | null>(null);
+  const [peerFilter, setPeerFilter] = useState<string | null>(
+    () => searchParams.get("peer"),
+  );
   const [statusFilter, setStatusFilter] = useState<"ok" | "error" | null>(
     () => {
       const v = searchParams.get("status");
@@ -40,6 +43,9 @@ export function TracesView() {
         const parts: string[] = [];
         if (serviceFilter) {
           parts.push(`service_name:"${serviceFilter}"`);
+        }
+        if (peerFilter) {
+          parts.push(`(span_kind:3 OR span_kind:4) AND span_attributes.peer.service:"${peerFilter}"`);
         }
         if (fingerprintFilter) {
           parts.push(`span_fingerprint:"${fingerprintFilter}"`);
@@ -73,7 +79,7 @@ export function TracesView() {
         setLoading(false);
       }
     },
-    [serviceFilter, fingerprintFilter, statusFilter],
+    [serviceFilter, peerFilter, fingerprintFilter, statusFilter],
   );
 
   const handleFilterChange = useCallback(
@@ -87,6 +93,13 @@ export function TracesView() {
     setServiceFilter(null);
     const next = new URLSearchParams(searchParams);
     next.delete("service");
+    setSearchParams(next, { replace: true });
+  }
+
+  function clearPeerFilter() {
+    setPeerFilter(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete("peer");
     setSearchParams(next, { replace: true });
   }
 
@@ -112,7 +125,7 @@ export function TracesView() {
   return (
     <div className="flex flex-1 flex-col">
       <FilterBar index="otel-traces-v0_9" onFilterChange={handleFilterChange} />
-      {(serviceFilter || fingerprintFilter || statusFilter) && (
+      {(serviceFilter || peerFilter || fingerprintFilter || statusFilter) && (
         <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5">
           {serviceFilter && (
             <>
@@ -121,6 +134,20 @@ export function TracesView() {
                 {serviceFilter}
                 <button
                   onClick={clearServiceFilter}
+                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            </>
+          )}
+          {peerFilter && (
+            <>
+              <span className="text-xs text-muted-foreground">Peer:</span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
+                {peerFilter}
+                <button
+                  onClick={clearPeerFilter}
                   className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
                   <X className="h-3 w-3" />

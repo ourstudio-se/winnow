@@ -7,6 +7,7 @@ interface ServiceContextMenuProps {
   x: number;
   y: number;
   hasErrors: boolean;
+  isImplicit: boolean;
   onClose: () => void;
   onDrilldown: (errorsOnly: boolean) => void;
 }

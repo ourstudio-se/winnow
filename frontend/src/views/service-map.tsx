@@ -35,22 +35,35 @@ import { OperationsDrilldownPanel } from "@/components/operations-drilldown";
 
 // --- Types ---
 
-interface SpanDoc {
-  service_name: string;
-  span_name: string;
-  span_kind: number;
-  span_duration_millis: number;
-  span_attributes: Record<string, string> | null;
-  span_status: { code?: number } | null;
-  trace_id: string;
-}
-
 interface AggregatedEdge {
   source: string;
   dest: string;
   callCount: number;
   errorCount: number;
   avgDurationMs: number;
+}
+
+interface InnerTermsBucket {
+  key: string;
+  doc_count: number;
+  avg_duration?: { value: number };
+}
+interface OuterTermsBucket {
+  key: string;
+  doc_count: number;
+  dests: { buckets: InnerTermsBucket[] };
+}
+interface EdgesAggResponse {
+  edges: { buckets: OuterTermsBucket[] };
+}
+
+interface ServiceTermsBucket {
+  key: string;
+  doc_count: number;
+  avg_duration?: { value: number };
+}
+interface ServiceAggResponse {
+  services: { buckets: ServiceTermsBucket[] };
 }
 
 type ServiceKind = "database" | "cache" | "gateway" | "service";
@@ -64,6 +77,7 @@ interface ServiceStats {
   avgDurationMs: number;
   errorRate: number;
   isRoot: boolean;
+  isImplicit: boolean;
 }
 
 type ServiceEdgeData = {
@@ -99,62 +113,31 @@ const serviceKindIcon: Record<ServiceKind, typeof Server> = {
   service: Server,
 };
 
-// --- Helpers ---
-
-const DEST_ATTR_KEYS = [
-  "peer.service",
-  "server.address",
-  "net.peer.name",
-  "http.host",
-];
-
-function resolveDestination(
-  attrs: Record<string, string> | null,
-): string | null {
-  if (!attrs) return null;
-  for (const key of DEST_ATTR_KEYS) {
-    const val = attrs[key];
-    if (val) return val;
-  }
-  return null;
-}
-
 // --- Aggregation ---
 
-function aggregateEdges(docs: SpanDoc[]): AggregatedEdge[] {
-  const map = new Map<
-    string,
-    { callCount: number; errorCount: number; totalDuration: number }
-  >();
-  for (const doc of docs) {
-    const dest = resolveDestination(doc.span_attributes);
-    if (!dest) continue;
-    const source = doc.service_name;
-    const isError = doc.span_status?.code === 2;
-    const key = `${source}\0${dest}`;
-    const entry = map.get(key);
-    if (entry) {
-      entry.callCount++;
-      if (isError) entry.errorCount++;
-      entry.totalDuration += doc.span_duration_millis;
-    } else {
-      map.set(key, {
-        callCount: 1,
-        errorCount: isError ? 1 : 0,
-        totalDuration: doc.span_duration_millis,
-      });
+function parseEdgesFromAggs(
+  allAgg: EdgesAggResponse,
+  errorAgg: EdgesAggResponse,
+): AggregatedEdge[] {
+  // Build error count lookup: "source\0dest" → count
+  const errorLookup = new Map<string, number>();
+  for (const outer of errorAgg.edges.buckets) {
+    for (const inner of outer.dests.buckets) {
+      errorLookup.set(`${outer.key}\0${inner.key}`, inner.doc_count);
     }
   }
+
   const result: AggregatedEdge[] = [];
-  for (const [key, val] of map) {
-    const [source, dest] = key.split("\0");
-    result.push({
-      source,
-      dest,
-      callCount: val.callCount,
-      errorCount: val.errorCount,
-      avgDurationMs: Math.round(val.totalDuration / val.callCount),
-    });
+  for (const outer of allAgg.edges.buckets) {
+    for (const inner of outer.dests.buckets) {
+      result.push({
+        source: outer.key,
+        dest: inner.key,
+        callCount: inner.doc_count,
+        errorCount: errorLookup.get(`${outer.key}\0${inner.key}`) ?? 0,
+        avgDurationMs: Math.round(inner.avg_duration?.value ?? 0),
+      });
+    }
   }
   return result;
 }
@@ -164,35 +147,52 @@ function aggregateEdges(docs: SpanDoc[]): AggregatedEdge[] {
 function computeServiceStats(
   serviceNames: string[],
   aggregated: AggregatedEdge[],
+  svcTotals: Map<string, { count: number; avgDurationMs: number }>,
+  svcErrors: Map<string, number>,
 ): Map<string, ServiceStats> {
+  const sources = new Set(aggregated.map((e) => e.source));
   const dests = new Set(aggregated.map((e) => e.dest));
   const roots = new Set(serviceNames.filter((n) => !dests.has(n)));
+  // Implicit leaves: appear only as destinations, never as sources (e.g. postgres, redis)
+  const implicitLeaves = new Set(serviceNames.filter((n) => !sources.has(n) && dests.has(n)));
 
   const stats = new Map<string, ServiceStats>();
   for (const name of serviceNames) {
-    stats.set(name, {
-      label: name,
-      serviceKind: inferServiceKind(name),
-      totalCalls: 0,
-      totalErrors: 0,
-      avgDurationMs: 0,
-      errorRate: 0,
-      isRoot: roots.has(name),
-    });
-  }
-
-  for (const edge of aggregated) {
-    const targetName = roots.has(edge.source) ? edge.source : edge.dest;
-    const s = stats.get(targetName)!;
-    s.totalCalls += edge.callCount;
-    s.totalErrors += edge.errorCount;
-    s.avgDurationMs += edge.avgDurationMs * edge.callCount;
-  }
-
-  for (const s of stats.values()) {
-    if (s.totalCalls > 0) {
-      s.avgDurationMs = Math.round(s.avgDurationMs / s.totalCalls);
-      s.errorRate = s.totalErrors / s.totalCalls;
+    if (implicitLeaves.has(name)) {
+      // Implicit leaf: use edge-derived stats (incoming CLIENT spans targeting this service)
+      let totalCalls = 0, totalErrors = 0, weightedDuration = 0;
+      for (const edge of aggregated) {
+        if (edge.dest === name) {
+          totalCalls += edge.callCount;
+          totalErrors += edge.errorCount;
+          weightedDuration += edge.avgDurationMs * edge.callCount;
+        }
+      }
+      stats.set(name, {
+        label: name,
+        serviceKind: inferServiceKind(name),
+        totalCalls,
+        totalErrors,
+        avgDurationMs: totalCalls > 0 ? Math.round(weightedDuration / totalCalls) : 0,
+        errorRate: totalCalls > 0 ? totalErrors / totalCalls : 0,
+        isRoot: false,
+        isImplicit: true,
+      });
+    } else {
+      // Real service: use per-service all-span-kind stats for accurate health
+      const svc = svcTotals.get(name);
+      const errors = svcErrors.get(name) ?? 0;
+      const totalCalls = svc?.count ?? 0;
+      stats.set(name, {
+        label: name,
+        serviceKind: inferServiceKind(name),
+        totalCalls,
+        totalErrors: errors,
+        avgDurationMs: Math.round(svc?.avgDurationMs ?? 0),
+        errorRate: totalCalls > 0 ? errors / totalCalls : 0,
+        isRoot: roots.has(name),
+        isImplicit: false,
+      });
     }
   }
 
@@ -301,7 +301,11 @@ function computeForceLayout(
 
 // --- Graph building ---
 
-function buildGraph(aggregated: AggregatedEdge[]): {
+function buildGraph(
+  aggregated: AggregatedEdge[],
+  svcTotals: Map<string, { count: number; avgDurationMs: number }>,
+  svcErrors: Map<string, number>,
+): {
   nodes: Node<ServiceStats>[];
   edges: Edge<ServiceEdgeData>[];
 } {
@@ -312,7 +316,7 @@ function buildGraph(aggregated: AggregatedEdge[]): {
   }
   const sorted = [...serviceNames].sort();
   const positions = computeForceLayout(sorted, aggregated);
-  const stats = computeServiceStats(sorted, aggregated);
+  const stats = computeServiceStats(sorted, aggregated, svcTotals, svcErrors);
 
   const nodes: Node<ServiceStats>[] = sorted.map((name) => {
     const pos = positions.get(name)!;
@@ -477,10 +481,12 @@ export function ServiceMapView() {
     x: number;
     y: number;
     hasErrors: boolean;
+    isImplicit: boolean;
   } | null>(null);
   const [drilldown, setDrilldown] = useState<{
     serviceName: string;
     errorsOnly: boolean;
+    isImplicit: boolean;
   } | null>(null);
 
   // Simulation refs
@@ -609,6 +615,7 @@ export function ServiceMapView() {
         x: event.clientX,
         y: event.clientY,
         hasErrors: node.data.totalErrors > 0,
+        isImplicit: node.data.isImplicit,
       });
     },
     [],
@@ -623,18 +630,83 @@ export function ServiceMapView() {
       setLoading(true);
       setError(null);
       try {
-        // Prepend span_kind filter (CLIENT=3, PRODUCER=4) to user query
         const userQuery = filters?.query && filters.query !== "*" ? filters.query : "";
         const kindFilter = "(span_kind:3 OR span_kind:4)";
-        const query = userQuery ? `${kindFilter} AND ${userQuery}` : kindFilter;
-        const res = await search<SpanDoc>("otel-traces-v0_9", {
-          query,
-          max_hits: 10000,
-          start_timestamp: filters?.startTimestamp,
-          end_timestamp: filters?.endTimestamp,
-        });
-        const aggregated = aggregateEdges(res.hits);
-        const graph = buildGraph(aggregated);
+        const baseQuery = userQuery ? `${kindFilter} AND ${userQuery}` : kindFilter;
+
+        const nestedAggs = {
+          edges: {
+            terms: { field: "service_name", size: 200 },
+            aggs: {
+              dests: {
+                terms: { field: "span_attributes.peer.service", size: 200 },
+                aggs: {
+                  avg_duration: { avg: { field: "span_duration_millis" } },
+                },
+              },
+            },
+          },
+        };
+
+        const svcAggs = {
+          services: {
+            terms: { field: "service_name", size: 200 },
+            aggs: {
+              avg_duration: { avg: { field: "span_duration_millis" } },
+            },
+          },
+        };
+        const svcQuery = userQuery || "*";
+        const svcErrorQuery = userQuery ? `span_status.code:2 AND ${userQuery}` : "span_status.code:2";
+
+        const [allRes, errorRes, svcAllRes, svcErrRes] = await Promise.all([
+          search<never>("otel-traces-v0_9", {
+            query: baseQuery,
+            max_hits: 0,
+            start_timestamp: filters?.startTimestamp,
+            end_timestamp: filters?.endTimestamp,
+            aggs: nestedAggs,
+          }),
+          search<never>("otel-traces-v0_9", {
+            query: `${baseQuery} AND span_status.code:2`,
+            max_hits: 0,
+            start_timestamp: filters?.startTimestamp,
+            end_timestamp: filters?.endTimestamp,
+            aggs: nestedAggs,
+          }),
+          search<never>("otel-traces-v0_9", {
+            query: svcQuery,
+            max_hits: 0,
+            start_timestamp: filters?.startTimestamp,
+            end_timestamp: filters?.endTimestamp,
+            aggs: svcAggs,
+          }),
+          search<never>("otel-traces-v0_9", {
+            query: svcErrorQuery,
+            max_hits: 0,
+            start_timestamp: filters?.startTimestamp,
+            end_timestamp: filters?.endTimestamp,
+            aggs: { services: { terms: { field: "service_name", size: 200 } } },
+          }),
+        ]);
+
+        const allAgg = allRes.aggregations as unknown as EdgesAggResponse;
+        const errorAgg = errorRes.aggregations as unknown as EdgesAggResponse;
+        const aggregated = parseEdgesFromAggs(allAgg, errorAgg);
+
+        // Per-service stats (all span kinds) for node health
+        const svcAllAgg = svcAllRes.aggregations as unknown as ServiceAggResponse;
+        const svcErrAgg = svcErrRes.aggregations as unknown as ServiceAggResponse;
+        const svcTotals = new Map<string, { count: number; avgDurationMs: number }>();
+        for (const b of svcAllAgg.services.buckets) {
+          svcTotals.set(b.key, { count: b.doc_count, avgDurationMs: b.avg_duration?.value ?? 0 });
+        }
+        const svcErrors = new Map<string, number>();
+        for (const b of svcErrAgg.services.buckets) {
+          svcErrors.set(b.key, b.doc_count);
+        }
+
+        const graph = buildGraph(aggregated, svcTotals, svcErrors);
         setNodes(graph.nodes);
         setEdges(graph.edges);
         startSimulation(graph.nodes, graph.edges);
@@ -722,6 +794,7 @@ export function ServiceMapView() {
             <OperationsDrilldownPanel
               serviceName={drilldown.serviceName}
               errorsOnly={drilldown.errorsOnly}
+              isImplicit={drilldown.isImplicit}
               onClose={() => setDrilldown(null)}
               onToggleErrorsOnly={(errorsOnly) =>
                 setDrilldown((prev) => (prev ? { ...prev, errorsOnly } : null))
@@ -736,11 +809,13 @@ export function ServiceMapView() {
           x={contextMenu.x}
           y={contextMenu.y}
           hasErrors={contextMenu.hasErrors}
+          isImplicit={contextMenu.isImplicit}
           onClose={() => setContextMenu(null)}
           onDrilldown={(errorsOnly) =>
             setDrilldown({
               serviceName: contextMenu.serviceName,
               errorsOnly,
+              isImplicit: contextMenu.isImplicit,
             })
           }
         />

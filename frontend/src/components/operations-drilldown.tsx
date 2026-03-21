@@ -7,6 +7,7 @@ import { SPAN_KIND_SHORT, formatDuration } from "@/lib/traces";
 interface OperationsDrilldownProps {
   serviceName: string;
   errorsOnly: boolean;
+  isImplicit: boolean;
   onClose: () => void;
   onToggleErrorsOnly: (errorsOnly: boolean) => void;
 }
@@ -71,6 +72,7 @@ function bucketsToRows(
 export function OperationsDrilldownPanel({
   serviceName,
   errorsOnly,
+  isImplicit,
   onClose,
   onToggleErrorsOnly,
 }: OperationsDrilldownProps) {
@@ -83,7 +85,9 @@ export function OperationsDrilldownPanel({
     setLoading(true);
     setError(null);
     try {
-      const base = `service_name:"${serviceName}"`;
+      const base = isImplicit
+        ? `(span_kind:3 OR span_kind:4) AND span_attributes.peer.service:"${serviceName}"`
+        : `service_name:"${serviceName}"`;
       const errorQuery = `${base} AND span_status.code:2`;
       const okQuery = `${base} AND NOT span_status.code:2`;
 
@@ -146,7 +150,7 @@ export function OperationsDrilldownPanel({
     } finally {
       setLoading(false);
     }
-  }, [serviceName, errorsOnly]);
+  }, [serviceName, errorsOnly, isImplicit]);
 
   useEffect(() => {
     fetchOperations();
@@ -208,7 +212,11 @@ export function OperationsDrilldownPanel({
               op={op}
               onClick={() => {
                 const params = new URLSearchParams();
-                params.set("service", serviceName);
+                if (isImplicit) {
+                  params.set("peer", serviceName);
+                } else {
+                  params.set("service", serviceName);
+                }
                 params.set("fingerprint", op.fingerprint);
                 params.set("status", op.status);
                 navigate(`/traces?${params.toString()}`);

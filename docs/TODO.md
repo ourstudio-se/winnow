@@ -37,6 +37,10 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Destination resolved client-side via `peer.service` → `server.address` → `net.peer.name` → `http.host` fallback chain
 - [x] FilterBar uses native Quickwit `start_timestamp`/`end_timestamp` instead of nanosecond range queries
 - [x] Integration test verifies CLIENT spans with `peer.service` attribute
+- [x] Service map uses server-side nested terms aggs (`max_hits: 0`) instead of raw-hit client-side aggregation
+- [x] Error attribution: source-based (errors attributed to the calling service, not the destination)
+- [x] Implicit leaf detection: nodes like postgres/redis that only appear as `peer.service` destinations are detected and drilldown queries adjusted to query CLIENT spans targeting them
+- [x] Simplified to `peer.service` only (dropped 4-key fallback chain)
 
 ## Phase 4b: OTLP Log Ingest
 
