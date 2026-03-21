@@ -17,6 +17,16 @@ export function TracesView() {
   const [serviceFilter, setServiceFilter] = useState<string | null>(
     () => searchParams.get("service"),
   );
+  const [fingerprintFilter, setFingerprintFilter] = useState<string | null>(
+    () => searchParams.get("fingerprint"),
+  );
+  const [fingerprintLabel, setFingerprintLabel] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"ok" | "error" | null>(
+    () => {
+      const v = searchParams.get("status");
+      return v === "ok" || v === "error" ? v : null;
+    },
+  );
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [numHits, setNumHits] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -31,6 +41,14 @@ export function TracesView() {
         if (serviceFilter) {
           parts.push(`service_name:"${serviceFilter}"`);
         }
+        if (fingerprintFilter) {
+          parts.push(`span_fingerprint:"${fingerprintFilter}"`);
+        }
+        if (statusFilter === "error") {
+          parts.push("span_status.code:2");
+        } else if (statusFilter === "ok") {
+          parts.push("NOT span_status.code:2");
+        }
         if (filters?.query && filters.query !== "*") {
           parts.push(filters.query);
         }
@@ -42,13 +60,20 @@ export function TracesView() {
         });
         setNumHits(res.num_hits);
         setTraces(groupSpansByTrace(res.hits));
+        // Resolve fingerprint → human-readable span name from first matching hit
+        if (fingerprintFilter && res.hits.length > 0) {
+          const match = res.hits.find(
+            (h) => h.span_fingerprint === fingerprintFilter,
+          );
+          setFingerprintLabel(match?.span_name ?? null);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to fetch traces");
       } finally {
         setLoading(false);
       }
     },
-    [serviceFilter],
+    [serviceFilter, fingerprintFilter, statusFilter],
   );
 
   const handleFilterChange = useCallback(
@@ -60,7 +85,24 @@ export function TracesView() {
 
   function clearServiceFilter() {
     setServiceFilter(null);
-    setSearchParams({}, { replace: true });
+    const next = new URLSearchParams(searchParams);
+    next.delete("service");
+    setSearchParams(next, { replace: true });
+  }
+
+  function clearFingerprintFilter() {
+    setFingerprintFilter(null);
+    setFingerprintLabel(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete("fingerprint");
+    setSearchParams(next, { replace: true });
+  }
+
+  function clearStatusFilter() {
+    setStatusFilter(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete("status");
+    setSearchParams(next, { replace: true });
   }
 
   useEffect(() => {
@@ -70,18 +112,54 @@ export function TracesView() {
   return (
     <div className="flex flex-1 flex-col">
       <FilterBar index="otel-traces-v0_9" onFilterChange={handleFilterChange} />
-      {serviceFilter && (
+      {(serviceFilter || fingerprintFilter || statusFilter) && (
         <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5">
-          <span className="text-xs text-muted-foreground">Filtered by service:</span>
-          <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
-            {serviceFilter}
-            <button
-              onClick={clearServiceFilter}
-              className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </span>
+          {serviceFilter && (
+            <>
+              <span className="text-xs text-muted-foreground">Service:</span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
+                {serviceFilter}
+                <button
+                  onClick={clearServiceFilter}
+                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            </>
+          )}
+          {fingerprintFilter && (
+            <>
+              <span className="text-xs text-muted-foreground">Operation:</span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
+                {fingerprintLabel ?? fingerprintFilter.slice(0, 12) + "..."}
+                <button
+                  onClick={clearFingerprintFilter}
+                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            </>
+          )}
+          {statusFilter && (
+            <>
+              <span className="text-xs text-muted-foreground">Status:</span>
+              <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium ${
+                statusFilter === "error"
+                  ? "border-red-500/30 bg-red-500/10 text-red-400"
+                  : "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+              }`}>
+                {statusFilter === "error" ? "Errors" : "OK"}
+                <button
+                  onClick={clearStatusFilter}
+                  className="ml-0.5 rounded-sm p-0.5 hover:bg-muted"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            </>
+          )}
           <Link
             to="/"
             className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"

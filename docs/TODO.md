@@ -88,6 +88,9 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] **FilterBar value autocomplete** — terms aggregation populates suggested values when selecting a field, combobox-style picker with search filtering and custom value entry
 - [x] **FilterBar base query scoping** — autocomplete (terms agg + field discovery) scoped to the view's base query (e.g. CLIENT/PRODUCER spans only on service map)
 - [x] **Traces view** — trace list with FilterBar + grouped table, full-page trace detail with span waterfall timeline and detail panel
+- [x] **Service Map context menu** — single-click node opens context menu (show logs, show traces, operations overview, errors-only conditionally shown based on service error count)
+- [x] **Operations drilldown panel** — right-side panel on service map; errored and OK operations shown as separate rows (never merged), each row navigates to traces with service + fingerprint + status filter
+- [x] **Traces fingerprint + status filters** — `fingerprint` and `status` URL params filter traces, shown as dismissable chips (status chip color-coded red/green)
 - [ ] **Logs view** — search bar + table listing logs, link to associated trace
 - [ ] Verify: can see service map with real edges, click through to traces and logs
 

@@ -181,6 +181,14 @@ export function formatTimestampShort(nanos: number): string {
   return new Date(nanos / 1_000_000).toLocaleTimeString();
 }
 
+export const SPAN_KIND_SHORT: Record<number, string> = {
+  1: "INT",
+  2: "SRV",
+  3: "CLI",
+  4: "PRD",
+  5: "CSM",
+};
+
 const SPAN_KIND_LABELS: Record<number, string> = {
   0: "Unspecified",
   1: "Internal",

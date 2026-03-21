@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
 import {
   ReactFlow,
   Background,
@@ -31,6 +30,8 @@ import {
 import { Server, Database, Globe, Zap, AlertTriangle } from "lucide-react";
 import { search } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
+import { ServiceContextMenu } from "@/components/service-context-menu";
+import { OperationsDrilldownPanel } from "@/components/operations-drilldown";
 
 // --- Types ---
 
@@ -467,11 +468,20 @@ const edgeTypes = { service: ServiceEdge };
 // --- Main view ---
 
 export function ServiceMapView() {
-  const navigate = useNavigate();
   const [nodes, setNodes] = useState<Node<ServiceStats>[]>([]);
   const [edges, setEdges] = useState<Edge<ServiceEdgeData>[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    serviceName: string;
+    x: number;
+    y: number;
+    hasErrors: boolean;
+  } | null>(null);
+  const [drilldown, setDrilldown] = useState<{
+    serviceName: string;
+    errorsOnly: boolean;
+  } | null>(null);
 
   // Simulation refs
   const simRef = useRef<Simulation<ForceNode, SimulationLinkDatum<ForceNode>> | null>(null);
@@ -592,12 +602,21 @@ export function ServiceMapView() {
     simRef.current?.alphaTarget(0);
   }, []);
 
-  const onNodeDoubleClick = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      navigate(`/traces?service=${encodeURIComponent(node.id)}`);
+  const onNodeClick = useCallback(
+    (event: React.MouseEvent, node: Node<ServiceStats>) => {
+      setContextMenu({
+        serviceName: node.id,
+        x: event.clientX,
+        y: event.clientY,
+        hasErrors: node.data.totalErrors > 0,
+      });
     },
-    [navigate],
+    [],
   );
+
+  const onPaneClick = useCallback(() => {
+    setContextMenu(null);
+  }, []);
 
   const fetchData = useCallback(
     async (filters?: FilterState) => {
@@ -675,28 +694,56 @@ export function ServiceMapView() {
           </p>
         </div>
       ) : (
-        <div className="flex-1">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={handleNodesChange}
-            onNodeDragStart={onNodeDragStart}
-            onNodeDrag={onNodeDrag}
-            onNodeDragStop={onNodeDragStop}
-            onNodeDoubleClick={onNodeDoubleClick}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            colorMode="dark"
-            fitView
-            fitViewOptions={{ padding: 0.4 }}
-            nodesDraggable
-            nodesConnectable={false}
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-            <Controls />
-          </ReactFlow>
+        <div className="flex flex-1">
+          <div className="flex-1">
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={handleNodesChange}
+              onNodeDragStart={onNodeDragStart}
+              onNodeDrag={onNodeDrag}
+              onNodeDragStop={onNodeDragStop}
+              onNodeClick={onNodeClick}
+              onPaneClick={onPaneClick}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              colorMode="dark"
+              fitView
+              fitViewOptions={{ padding: 0.4 }}
+              nodesDraggable
+              nodesConnectable={false}
+              proOptions={{ hideAttribution: true }}
+            >
+              <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+              <Controls />
+            </ReactFlow>
+          </div>
+          {drilldown && (
+            <OperationsDrilldownPanel
+              serviceName={drilldown.serviceName}
+              errorsOnly={drilldown.errorsOnly}
+              onClose={() => setDrilldown(null)}
+              onToggleErrorsOnly={(errorsOnly) =>
+                setDrilldown((prev) => (prev ? { ...prev, errorsOnly } : null))
+              }
+            />
+          )}
         </div>
+      )}
+      {contextMenu && (
+        <ServiceContextMenu
+          serviceName={contextMenu.serviceName}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          hasErrors={contextMenu.hasErrors}
+          onClose={() => setContextMenu(null)}
+          onDrilldown={(errorsOnly) =>
+            setDrilldown({
+              serviceName: contextMenu.serviceName,
+              errorsOnly,
+            })
+          }
+        />
       )}
     </div>
   );
