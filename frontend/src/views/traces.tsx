@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router";
-import { AlertCircle, X, Map } from "lucide-react";
+import { AlertCircle, Map } from "lucide-react";
 import { search } from "@/lib/api";
-import { FilterBar, type FilterState } from "@/components/filter-bar";
+import { FilterBar, type FilterState, type UrlFilterConfig } from "@/components/filter-bar";
 import {
   type SpanDocument,
   type TraceSummary,
@@ -11,30 +11,46 @@ import {
   formatTimestamp,
 } from "@/lib/traces";
 
+const TRACES_URL_FILTERS: UrlFilterConfig[] = [
+  {
+    param: "service",
+    label: "Service",
+    hiddenField: "service_name",
+    buildClause: (v) => `service_name:"${v}"`,
+  },
+  {
+    param: "peer",
+    label: "Peer",
+    hiddenField: "span_attributes.peer.service",
+    buildClause: (v) => `(span_kind:3 OR span_kind:4) AND span_attributes.peer.service:"${v}"`,
+  },
+  {
+    param: "fingerprint",
+    label: "Operation",
+    hiddenField: "span_fingerprint",
+    buildClause: (v) => `span_fingerprint:"${v}"`,
+    renderValue: (v) => ({ text: v.slice(0, 12) + "...", className: "font-mono" }),
+  },
+  {
+    param: "status",
+    label: "Status",
+    buildClause: (v) => v === "error" ? "span_status.code:2" : "NOT span_status.code:2",
+    renderValue: (v) =>
+      v === "error"
+        ? { text: "Errors", className: "text-red-400" }
+        : { text: "OK", className: "text-emerald-400" },
+  },
+];
+
 export function TracesView() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [serviceFilter, setServiceFilter] = useState<string | null>(
-    () => searchParams.get("service"),
-  );
-  const [fingerprintFilter, setFingerprintFilter] = useState<string | null>(
-    () => searchParams.get("fingerprint"),
-  );
-  const [fingerprintLabel, setFingerprintLabel] = useState<string | null>(null);
-  const [peerFilter, setPeerFilter] = useState<string | null>(
-    () => searchParams.get("peer"),
-  );
-  const [statusFilter, setStatusFilter] = useState<"ok" | "error" | null>(
-    () => {
-      const v = searchParams.get("status");
-      return v === "ok" || v === "error" ? v : null;
-    },
-  );
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [numHits, setNumHits] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const filterBarStateRef = useRef<FilterState | undefined>(undefined);
+  const [resolvedLabels, setResolvedLabels] = useState<Record<string, string>>({});
 
   const fetchData = useCallback(
     async (filters?: FilterState) => {
@@ -42,25 +58,10 @@ export function TracesView() {
       setLoading(true);
       setError(null);
       try {
-        const parts: string[] = [];
-        if (serviceFilter) {
-          parts.push(`service_name:"${serviceFilter}"`);
-        }
-        if (peerFilter) {
-          parts.push(`(span_kind:3 OR span_kind:4) AND span_attributes.peer.service:"${peerFilter}"`);
-        }
-        if (fingerprintFilter) {
-          parts.push(`span_fingerprint:"${fingerprintFilter}"`);
-        }
-        if (statusFilter === "error") {
-          parts.push("span_status.code:2");
-        } else if (statusFilter === "ok") {
-          parts.push("NOT span_status.code:2");
-        }
-        if (effectiveFilters?.query && effectiveFilters.query !== "*") {
-          parts.push(effectiveFilters.query);
-        }
-        const query = parts.length > 0 ? parts.join(" AND ") : "*";
+        const query =
+          effectiveFilters?.query && effectiveFilters.query !== "*"
+            ? effectiveFilters.query
+            : "*";
         const res = await search<SpanDocument>("otel-traces-v0_9", {
           query,
           max_hits: 200,
@@ -69,11 +70,10 @@ export function TracesView() {
         setNumHits(res.num_hits);
         setTraces(groupSpansByTrace(res.hits));
         // Resolve fingerprint → human-readable span name from first matching hit
-        if (fingerprintFilter && res.hits.length > 0) {
-          const match = res.hits.find(
-            (h) => h.span_fingerprint === fingerprintFilter,
-          );
-          setFingerprintLabel(match?.span_name ?? null);
+        const fp = searchParams.get("fingerprint");
+        if (fp && res.hits.length > 0) {
+          const match = res.hits.find((h) => h.span_fingerprint === fp);
+          if (match) setResolvedLabels((prev) => ({ ...prev, fingerprint: match.span_name }));
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to fetch traces");
@@ -81,7 +81,7 @@ export function TracesView() {
         setLoading(false);
       }
     },
-    [serviceFilter, peerFilter, fingerprintFilter, statusFilter],
+    [searchParams],
   );
 
   const handleFilterChange = useCallback(
@@ -92,128 +92,33 @@ export function TracesView() {
     [fetchData],
   );
 
-  function clearServiceFilter() {
-    setServiceFilter(null);
-    const next = new URLSearchParams(searchParams);
-    next.delete("service");
-    setSearchParams(next, { replace: true });
-  }
-
-  function clearPeerFilter() {
-    setPeerFilter(null);
-    const next = new URLSearchParams(searchParams);
-    next.delete("peer");
-    setSearchParams(next, { replace: true });
-  }
-
-  function clearFingerprintFilter() {
-    setFingerprintFilter(null);
-    setFingerprintLabel(null);
-    const next = new URLSearchParams(searchParams);
-    next.delete("fingerprint");
-    setSearchParams(next, { replace: true });
-  }
-
-  function clearStatusFilter() {
-    setStatusFilter(null);
-    const next = new URLSearchParams(searchParams);
-    next.delete("status");
-    setSearchParams(next, { replace: true });
-  }
-
-  useEffect(() => {
-    if (filterBarStateRef.current) {
-      fetchData(filterBarStateRef.current);
-    }
-  }, [fetchData]);
-
-  const hiddenFilterFields = useMemo(() => {
-    const fields: string[] = [];
-    if (serviceFilter) fields.push("service_name");
-    if (peerFilter) fields.push("span_attributes.peer.service");
-    return fields;
-  }, [serviceFilter, peerFilter]);
+  const serviceMapLink = useMemo(() => {
+    const svc = searchParams.get("service");
+    const peer = searchParams.get("peer");
+    if (!svc && !peer) return null;
+    const p = new URLSearchParams();
+    if (svc) p.set("service", svc);
+    if (peer) p.set("peer", peer);
+    return (
+      <Link
+        to={`/?${p}`}
+        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <Map className="h-3 w-3" />
+        Service Map
+      </Link>
+    );
+  }, [searchParams]);
 
   return (
     <div className="flex flex-1 flex-col">
-      <FilterBar index="otel-traces-v0_9" onFilterChange={handleFilterChange} additionalHiddenFields={hiddenFilterFields} />
-      {(serviceFilter || peerFilter || fingerprintFilter || statusFilter) && (
-        <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5">
-          {serviceFilter && (
-            <>
-              <span className="text-xs text-muted-foreground">Service:</span>
-              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
-                {serviceFilter}
-                <button
-                  onClick={clearServiceFilter}
-                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            </>
-          )}
-          {peerFilter && (
-            <>
-              <span className="text-xs text-muted-foreground">Peer:</span>
-              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
-                {peerFilter}
-                <button
-                  onClick={clearPeerFilter}
-                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            </>
-          )}
-          {fingerprintFilter && (
-            <>
-              <span className="text-xs text-muted-foreground">Operation:</span>
-              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
-                {fingerprintLabel ?? fingerprintFilter.slice(0, 12) + "..."}
-                <button
-                  onClick={clearFingerprintFilter}
-                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            </>
-          )}
-          {statusFilter && (
-            <>
-              <span className="text-xs text-muted-foreground">Status:</span>
-              <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium ${
-                statusFilter === "error"
-                  ? "border-red-500/30 bg-red-500/10 text-red-400"
-                  : "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-              }`}>
-                {statusFilter === "error" ? "Errors" : "OK"}
-                <button
-                  onClick={clearStatusFilter}
-                  className="ml-0.5 rounded-sm p-0.5 hover:bg-muted"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            </>
-          )}
-          <Link
-            to={(() => {
-              const p = new URLSearchParams();
-              if (serviceFilter) p.set("service", serviceFilter);
-              if (peerFilter) p.set("peer", peerFilter);
-              const qs = p.toString();
-              return qs ? `/?${qs}` : "/";
-            })()}
-            className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <Map className="h-3 w-3" />
-            Service Map
-          </Link>
-        </div>
-      )}
+      <FilterBar
+        index="otel-traces-v0_9"
+        onFilterChange={handleFilterChange}
+        urlFilters={TRACES_URL_FILTERS}
+        resolvedLabels={resolvedLabels}
+        trailing={serviceMapLink}
+      />
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           Loading traces...
@@ -270,7 +175,6 @@ export function TracesView() {
                       <span
                         onClick={(e) => {
                           e.stopPropagation();
-                          setServiceFilter(trace.rootServiceName);
                           const next = new URLSearchParams(searchParams);
                           next.set("service", trace.rootServiceName);
                           setSearchParams(next, { replace: true });

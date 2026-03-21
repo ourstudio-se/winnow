@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router";
-import { ArrowLeft, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, AlertCircle, ChevronDown, ChevronRight, Map } from "lucide-react";
 import { search } from "@/lib/api";
 import {
   type SpanDocument,
@@ -440,8 +440,15 @@ export function TraceDetailView() {
             {formatTimestamp(traceStart)}
           </span>
         </div>
+        <Link
+          to={`/?trace=${traceId}`}
+          className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <Map className="h-3 w-3" />
+          Service Map
+        </Link>
         {numHits > spans.length && (
-          <span className="ml-auto text-xs text-amber-500">
+          <span className="text-xs text-amber-500">
             Showing {spans.length} of {numHits} spans
           </span>
         )}

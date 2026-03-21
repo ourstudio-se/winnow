@@ -17,13 +17,25 @@ export interface FilterState {
   query: string;
 }
 
+export interface UrlFilterConfig {
+  param: string;
+  label: string;
+  buildClause: (value: string) => string;
+  hiddenField?: string;
+  renderValue?: (value: string) => { text: string; className?: string };
+}
+
 interface FilterBarProps {
   index: IndexId;
   onFilterChange: (filters: FilterState) => void;
   /** Optional base query to scope autocomplete suggestions (e.g. "span_kind:3"). Defaults to "*". */
   baseQuery?: string;
-  /** Fields to hide from the "Add filter" field picker (e.g. already filtered via URL params). */
-  additionalHiddenFields?: string[];
+  /** URL params to treat as filters. Derived reactively from searchParams. */
+  urlFilters?: UrlFilterConfig[];
+  /** View-provided display overrides for URL filter values (e.g. fingerprint → span name). */
+  resolvedLabels?: Record<string, string>;
+  /** Right-aligned trailing content (e.g. "Service Map" link). */
+  trailing?: React.ReactNode;
 }
 
 interface ActiveFilter {
@@ -195,7 +207,7 @@ function FilterChip({
   );
 }
 
-export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHiddenFields }: FilterBarProps) {
+export function FilterBar({ index, onFilterChange, baseQuery = "*", urlFilters, resolvedLabels, trailing }: FilterBarProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
   const [timePresetIndex, setTimePresetIndex] = useState(() => {
@@ -218,7 +230,14 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHi
   const [suggestedValues, setSuggestedValues] = useState<string[]>([]);
   const [valuesLoading, setValuesLoading] = useState(false);
   const valueInputRef = useRef<HTMLInputElement>(null);
-  const initialFiredRef = useRef(false);
+
+  // Derive active URL filter values reactively from searchParams
+  const activeUrlFilters = useMemo(() => {
+    if (!urlFilters) return [];
+    return urlFilters
+      .map((config) => ({ config, value: searchParams.get(config.param) }))
+      .filter((f): f is { config: UrlFilterConfig; value: string } => f.value != null);
+  }, [urlFilters, searchParams]);
 
   // Sync URL param on mount if missing (populate from resolved value)
   useEffect(() => {
@@ -250,7 +269,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHi
   // (the traces index uses u64 timestamps, not datetime, so Quickwit's
   // start_timestamp/end_timestamp params don't apply).
   const buildFilterState = useCallback(
-    (filters: ActiveFilter[], presetIdx: number): FilterState => {
+    (filters: ActiveFilter[], presetIdx: number, urlClauses: string[]): FilterState => {
       const preset = TIME_PRESETS[presetIdx];
       const parts: string[] = [];
       if (preset.seconds != null) {
@@ -262,6 +281,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHi
       }
       const filterQuery = buildQuery(filters);
       if (filterQuery !== "*") parts.push(filterQuery);
+      for (const clause of urlClauses) parts.push(clause);
       return {
         query: parts.length > 0 ? parts.join(" AND ") : "*",
       };
@@ -269,13 +289,21 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHi
     [],
   );
 
-  // Fire initial filter on mount
+  // Compute current URL clauses
+  const urlClauses = useMemo(
+    () => activeUrlFilters.map((f) => f.config.buildClause(f.value)),
+    [activeUrlFilters],
+  );
+
+  // Fire onFilterChange on mount and whenever URL filters change
+  const prevUrlClausesRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!initialFiredRef.current) {
-      initialFiredRef.current = true;
-      onFilterChange(buildFilterState(activeFilters, timePresetIndex));
+    const key = urlClauses.join("\0");
+    if (key !== prevUrlClausesRef.current) {
+      prevUrlClausesRef.current = key;
+      onFilterChange(buildFilterState(activeFilters, timePresetIndex, urlClauses));
     }
-  }, [onFilterChange, buildFilterState, activeFilters, timePresetIndex]);
+  }, [urlClauses, activeFilters, timePresetIndex, buildFilterState, onFilterChange]);
 
   function addFilter(field: DiscoveredField, value: string) {
     const trimmed = value.trim();
@@ -287,13 +315,20 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHi
     };
     const next = [...activeFilters, newFilter];
     setActiveFilters(next);
-    onFilterChange(buildFilterState(next, timePresetIndex));
+    onFilterChange(buildFilterState(next, timePresetIndex, urlClauses));
   }
 
   function removeFilter(idx: number) {
     const next = activeFilters.filter((_, i) => i !== idx);
     setActiveFilters(next);
-    onFilterChange(buildFilterState(next, timePresetIndex));
+    onFilterChange(buildFilterState(next, timePresetIndex, urlClauses));
+  }
+
+  function removeUrlFilter(param: string) {
+    const next = new URLSearchParams(searchParams);
+    next.delete(param);
+    setSearchParams(next, { replace: true });
+    // onFilterChange will fire via the useEffect that watches urlClauses
   }
 
   function handleTimePresetChange(newIndex: number) {
@@ -303,7 +338,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHi
     const next = new URLSearchParams(searchParams);
     next.set("time", key);
     setSearchParams(next, { replace: true });
-    onFilterChange(buildFilterState(activeFilters, newIndex));
+    onFilterChange(buildFilterState(activeFilters, newIndex, urlClauses));
   }
 
   // Reset popover state when it closes
@@ -351,14 +386,14 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHi
   // Filtered field list for the search
   const filteredFields = useMemo(() => {
     let fields = discoveredFields;
-    if (additionalHiddenFields && additionalHiddenFields.length > 0) {
-      const hidden = new Set(additionalHiddenFields);
-      fields = fields.filter((f) => !hidden.has(f.field));
-    }
+    const hidden = new Set(
+      activeUrlFilters.map((f) => f.config.hiddenField).filter(Boolean) as string[],
+    );
+    if (hidden.size > 0) fields = fields.filter((f) => !hidden.has(f.field));
     if (!fieldSearch) return fields;
     const lower = fieldSearch.toLowerCase();
     return fields.filter((f) => f.field.toLowerCase().includes(lower));
-  }, [discoveredFields, fieldSearch, additionalHiddenFields]);
+  }, [discoveredFields, fieldSearch, activeUrlFilters]);
 
   const filteredValues = useMemo(() => {
     if (!valueInput) return suggestedValues;
@@ -380,6 +415,27 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHi
           </option>
         ))}
       </select>
+
+      {/* URL filter chips */}
+      {activeUrlFilters.map(({ config, value }) => {
+        const resolved = resolvedLabels?.[config.param];
+        const rendered = config.renderValue?.(value);
+        const displayText = resolved ?? rendered?.text ?? value;
+        const className = !resolved ? rendered?.className : undefined;
+        return (
+          <span key={config.param} className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs text-foreground">
+            <span className="text-muted-foreground">{config.label}</span>
+            <span>=</span>
+            <span className={`font-medium ${className ?? ""}`}>{displayText}</span>
+            <button
+              onClick={() => removeUrlFilter(config.param)}
+              className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        );
+      })}
 
       {/* Active filter chips */}
       {activeFilters.map((f, i) => (
@@ -518,6 +574,8 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHi
           )}
         </PopoverContent>
       </Popover>
+
+      {trailing && <div className="ml-auto">{trailing}</div>}
     </div>
   );
 }

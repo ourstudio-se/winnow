@@ -1,6 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
-import { X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -31,7 +29,7 @@ import {
 } from "d3-force";
 import { Server, Database, Globe, Zap, AlertTriangle } from "lucide-react";
 import { search } from "@/lib/api";
-import { FilterBar, type FilterState } from "@/components/filter-bar";
+import { FilterBar, type FilterState, type UrlFilterConfig } from "@/components/filter-bar";
 import { ServiceContextMenu } from "@/components/service-context-menu";
 import { OperationsDrilldownPanel } from "@/components/operations-drilldown";
 
@@ -473,15 +471,29 @@ const edgeTypes = { service: ServiceEdge };
 
 // --- Main view ---
 
-export function ServiceMapView() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [serviceFilter, setServiceFilter] = useState<string | null>(
-    () => searchParams.get("service"),
-  );
-  const [peerFilter, setPeerFilter] = useState<string | null>(
-    () => searchParams.get("peer"),
-  );
+const SERVICE_MAP_URL_FILTERS: UrlFilterConfig[] = [
+  {
+    param: "service",
+    label: "Service",
+    hiddenField: "service_name",
+    buildClause: (v) => `service_name:"${v}"`,
+  },
+  {
+    param: "peer",
+    label: "Peer",
+    hiddenField: "span_attributes.peer.service",
+    buildClause: (v) => `span_attributes.peer.service:"${v}"`,
+  },
+  {
+    param: "trace",
+    label: "Trace",
+    hiddenField: "trace_id",
+    buildClause: (v) => `trace_id:${v}`,
+    renderValue: (v) => ({ text: v.slice(0, 16) + "...", className: "font-mono" }),
+  },
+];
 
+export function ServiceMapView() {
   const [nodes, setNodes] = useState<Node<ServiceStats>[]>([]);
   const [edges, setEdges] = useState<Edge<ServiceEdgeData>[]>([]);
   const [loading, setLoading] = useState(true);
@@ -643,17 +655,10 @@ export function ServiceMapView() {
       setLoading(true);
       setError(null);
       try {
-        const queryParts: string[] = [];
-        if (effectiveFilters?.query && effectiveFilters.query !== "*") {
-          queryParts.push(effectiveFilters.query);
-        }
-        if (serviceFilter) {
-          queryParts.push(`service_name:"${serviceFilter}"`);
-        }
-        if (peerFilter) {
-          queryParts.push(`span_attributes.peer.service:"${peerFilter}"`);
-        }
-        const userQuery = queryParts.length > 0 ? queryParts.join(" AND ") : "";
+        const userQuery =
+          effectiveFilters?.query && effectiveFilters.query !== "*"
+            ? effectiveFilters.query
+            : "";
         const kindFilter = "(span_kind:3 OR span_kind:4)";
         const baseQuery = userQuery ? `${kindFilter} AND ${userQuery}` : kindFilter;
 
@@ -733,7 +738,7 @@ export function ServiceMapView() {
         setLoading(false);
       }
     },
-    [startSimulation, serviceFilter, peerFilter],
+    [startSimulation],
   );
 
   const handleFilterChange = useCallback(
@@ -744,33 +749,6 @@ export function ServiceMapView() {
     [fetchData],
   );
 
-  useEffect(() => {
-    if (filterBarStateRef.current) {
-      fetchData(filterBarStateRef.current);
-    }
-  }, [fetchData]);
-
-  function clearServiceFilter() {
-    setServiceFilter(null);
-    const next = new URLSearchParams(searchParams);
-    next.delete("service");
-    setSearchParams(next, { replace: true });
-  }
-
-  function clearPeerFilter() {
-    setPeerFilter(null);
-    const next = new URLSearchParams(searchParams);
-    next.delete("peer");
-    setSearchParams(next, { replace: true });
-  }
-
-  const hiddenFilterFields = useMemo(() => {
-    const fields: string[] = [];
-    if (serviceFilter) fields.push("service_name");
-    if (peerFilter) fields.push("span_attributes.peer.service");
-    return fields;
-  }, [serviceFilter, peerFilter]);
-
   // Cleanup simulation on unmount
   useEffect(() => {
     return () => {
@@ -780,39 +758,12 @@ export function ServiceMapView() {
 
   return (
     <div className="flex flex-1 flex-col">
-      <FilterBar index="otel-traces-v0_9" baseQuery="(span_kind:3 OR span_kind:4)" onFilterChange={handleFilterChange} additionalHiddenFields={hiddenFilterFields} />
-      {(serviceFilter || peerFilter) && (
-        <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5">
-          {serviceFilter && (
-            <>
-              <span className="text-xs text-muted-foreground">Service:</span>
-              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
-                {serviceFilter}
-                <button
-                  onClick={clearServiceFilter}
-                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            </>
-          )}
-          {peerFilter && (
-            <>
-              <span className="text-xs text-muted-foreground">Peer:</span>
-              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
-                {peerFilter}
-                <button
-                  onClick={clearPeerFilter}
-                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            </>
-          )}
-        </div>
-      )}
+      <FilterBar
+        index="otel-traces-v0_9"
+        baseQuery="(span_kind:3 OR span_kind:4)"
+        onFilterChange={handleFilterChange}
+        urlFilters={SERVICE_MAP_URL_FILTERS}
+      />
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           Loading service map…
