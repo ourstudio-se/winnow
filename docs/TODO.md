@@ -87,7 +87,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] **FilterBar redesign** — "Add filter" chip flow with field picker popover, nested JSON key discovery via doc sampling, dot-escaping for Quickwit queries
 - [x] **FilterBar value autocomplete** — terms aggregation populates suggested values when selecting a field, combobox-style picker with search filtering and custom value entry
 - [x] **FilterBar base query scoping** — autocomplete (terms agg + field discovery) scoped to the view's base query (e.g. CLIENT/PRODUCER spans only on service map)
-- [ ] **Traces view** — search bar + table listing traces, click to expand span timeline
+- [x] **Traces view** — trace list with FilterBar + grouped table, full-page trace detail with span waterfall timeline and detail panel
 - [ ] **Logs view** — search bar + table listing logs, link to associated trace
 - [ ] Verify: can see service map with real edges, click through to traces and logs
 
