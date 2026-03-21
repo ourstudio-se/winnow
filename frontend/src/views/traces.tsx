@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router";
 import { AlertCircle, X, Map } from "lucide-react";
 import { search } from "@/lib/api";
@@ -34,9 +34,11 @@ export function TracesView() {
   const [numHits, setNumHits] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const filterBarStateRef = useRef<FilterState | undefined>(undefined);
 
   const fetchData = useCallback(
     async (filters?: FilterState) => {
+      const effectiveFilters = filters ?? filterBarStateRef.current;
       setLoading(true);
       setError(null);
       try {
@@ -55,8 +57,8 @@ export function TracesView() {
         } else if (statusFilter === "ok") {
           parts.push("NOT span_status.code:2");
         }
-        if (filters?.query && filters.query !== "*") {
-          parts.push(filters.query);
+        if (effectiveFilters?.query && effectiveFilters.query !== "*") {
+          parts.push(effectiveFilters.query);
         }
         const query = parts.length > 0 ? parts.join(" AND ") : "*";
         const res = await search<SpanDocument>("otel-traces-v0_9", {
@@ -84,6 +86,7 @@ export function TracesView() {
 
   const handleFilterChange = useCallback(
     (filters: FilterState) => {
+      filterBarStateRef.current = filters;
       fetchData(filters);
     },
     [fetchData],
@@ -119,12 +122,21 @@ export function TracesView() {
   }
 
   useEffect(() => {
-    fetchData();
+    if (filterBarStateRef.current) {
+      fetchData(filterBarStateRef.current);
+    }
   }, [fetchData]);
+
+  const hiddenFilterFields = useMemo(() => {
+    const fields: string[] = [];
+    if (serviceFilter) fields.push("service_name");
+    if (peerFilter) fields.push("span_attributes.peer.service");
+    return fields;
+  }, [serviceFilter, peerFilter]);
 
   return (
     <div className="flex flex-1 flex-col">
-      <FilterBar index="otel-traces-v0_9" onFilterChange={handleFilterChange} />
+      <FilterBar index="otel-traces-v0_9" onFilterChange={handleFilterChange} additionalHiddenFields={hiddenFilterFields} />
       {(serviceFilter || peerFilter || fingerprintFilter || statusFilter) && (
         <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5">
           {serviceFilter && (
@@ -188,7 +200,13 @@ export function TracesView() {
             </>
           )}
           <Link
-            to="/"
+            to={(() => {
+              const p = new URLSearchParams();
+              if (serviceFilter) p.set("service", serviceFilter);
+              if (peerFilter) p.set("peer", peerFilter);
+              const qs = p.toString();
+              return qs ? `/?${qs}` : "/";
+            })()}
             className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
           >
             <Map className="h-3 w-3" />
@@ -252,9 +270,10 @@ export function TracesView() {
                       <span
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigate(`/traces?service=${encodeURIComponent(trace.rootServiceName)}`);
                           setServiceFilter(trace.rootServiceName);
-                          setSearchParams({ service: trace.rootServiceName }, { replace: true });
+                          const next = new URLSearchParams(searchParams);
+                          next.set("service", trace.rootServiceName);
+                          setSearchParams(next, { replace: true });
                         }}
                         className="font-medium underline decoration-muted-foreground/30 hover:decoration-foreground"
                       >

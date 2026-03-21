@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import { X, Plus, Search, Loader2 } from "lucide-react";
 import {
   getIndexMetadata,
@@ -14,8 +15,6 @@ import {
 
 export interface FilterState {
   query: string;
-  startTimestamp?: number;
-  endTimestamp?: number;
 }
 
 interface FilterBarProps {
@@ -23,6 +22,8 @@ interface FilterBarProps {
   onFilterChange: (filters: FilterState) => void;
   /** Optional base query to scope autocomplete suggestions (e.g. "span_kind:3"). Defaults to "*". */
   baseQuery?: string;
+  /** Fields to hide from the "Add filter" field picker (e.g. already filtered via URL params). */
+  additionalHiddenFields?: string[];
 }
 
 interface ActiveFilter {
@@ -51,6 +52,14 @@ const TIME_PRESETS: TimePreset[] = [
 ];
 
 const DEFAULT_PRESET_INDEX = 1; // "Last 1 hour"
+
+const TIME_PRESET_KEYS = ["15m", "1h", "6h", "24h", "7d", "all"] as const;
+const STORAGE_KEY = "winnow-time-preset";
+
+function presetKeyToIndex(key: string): number {
+  const i = (TIME_PRESET_KEYS as readonly string[]).indexOf(key);
+  return i >= 0 ? i : DEFAULT_PRESET_INDEX;
+}
 
 // Fields not useful as user-facing filters
 const HIDDEN_FIELDS = new Set([
@@ -186,9 +195,16 @@ function FilterChip({
   );
 }
 
-export function FilterBar({ index, onFilterChange, baseQuery = "*" }: FilterBarProps) {
+export function FilterBar({ index, onFilterChange, baseQuery = "*", additionalHiddenFields }: FilterBarProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
-  const [timePresetIndex, setTimePresetIndex] = useState(DEFAULT_PRESET_INDEX);
+  const [timePresetIndex, setTimePresetIndex] = useState(() => {
+    const fromUrl = searchParams.get("time");
+    if (fromUrl) return presetKeyToIndex(fromUrl);
+    const fromStorage = localStorage.getItem(STORAGE_KEY);
+    if (fromStorage) return presetKeyToIndex(fromStorage);
+    return DEFAULT_PRESET_INDEX;
+  });
   const [discoveredFields, setDiscoveredFields] = useState<DiscoveredField[]>(
     [],
   );
@@ -203,6 +219,18 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*" }: FilterBarP
   const [valuesLoading, setValuesLoading] = useState(false);
   const valueInputRef = useRef<HTMLInputElement>(null);
   const initialFiredRef = useRef(false);
+
+  // Sync URL param on mount if missing (populate from resolved value)
+  useEffect(() => {
+    const key = TIME_PRESET_KEYS[timePresetIndex];
+    if (searchParams.get("time") !== key) {
+      const next = new URLSearchParams(searchParams);
+      next.set("time", key);
+      setSearchParams(next, { replace: true });
+    }
+    // Only on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Discover fields on mount / index change
   useEffect(() => {
@@ -270,6 +298,11 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*" }: FilterBarP
 
   function handleTimePresetChange(newIndex: number) {
     setTimePresetIndex(newIndex);
+    const key = TIME_PRESET_KEYS[newIndex];
+    localStorage.setItem(STORAGE_KEY, key);
+    const next = new URLSearchParams(searchParams);
+    next.set("time", key);
+    setSearchParams(next, { replace: true });
     onFilterChange(buildFilterState(activeFilters, newIndex));
   }
 
@@ -317,12 +350,15 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*" }: FilterBarP
 
   // Filtered field list for the search
   const filteredFields = useMemo(() => {
-    if (!fieldSearch) return discoveredFields;
+    let fields = discoveredFields;
+    if (additionalHiddenFields && additionalHiddenFields.length > 0) {
+      const hidden = new Set(additionalHiddenFields);
+      fields = fields.filter((f) => !hidden.has(f.field));
+    }
+    if (!fieldSearch) return fields;
     const lower = fieldSearch.toLowerCase();
-    return discoveredFields.filter((f) =>
-      f.field.toLowerCase().includes(lower),
-    );
-  }, [discoveredFields, fieldSearch]);
+    return fields.filter((f) => f.field.toLowerCase().includes(lower));
+  }, [discoveredFields, fieldSearch, additionalHiddenFields]);
 
   const filteredValues = useMemo(() => {
     if (!valueInput) return suggestedValues;

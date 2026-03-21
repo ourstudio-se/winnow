@@ -17,6 +17,7 @@ export function ServiceContextMenu({
   x,
   y,
   hasErrors,
+  isImplicit,
   onClose,
   onDrilldown,
 }: ServiceContextMenuProps) {
@@ -71,20 +72,26 @@ export function ServiceContextMenu({
       <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
         {serviceName}
       </div>
-      <MenuItem
-        icon={<FileText className="h-4 w-4" />}
-        label="Show logs"
-        onClick={() => {
-          onClose();
-          navigate(`/logs?service=${encodeURIComponent(serviceName)}`);
-        }}
-      />
+      {!isImplicit && (
+        <MenuItem
+          icon={<FileText className="h-4 w-4" />}
+          label="Show logs"
+          onClick={() => {
+            onClose();
+            navigate(`/logs?service=${encodeURIComponent(serviceName)}`);
+          }}
+        />
+      )}
       <MenuItem
         icon={<Activity className="h-4 w-4" />}
         label="Show traces"
         onClick={() => {
           onClose();
-          navigate(`/traces?service=${encodeURIComponent(serviceName)}`);
+          navigate(
+            isImplicit
+              ? `/traces?peer=${encodeURIComponent(serviceName)}`
+              : `/traces?service=${encodeURIComponent(serviceName)}`,
+          );
         }}
       />
       <div className="mx-1 my-1 border-t border-border" />

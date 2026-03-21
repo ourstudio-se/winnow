@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
+import { X } from "lucide-react";
 import {
   ReactFlow,
   Background,
@@ -472,6 +474,14 @@ const edgeTypes = { service: ServiceEdge };
 // --- Main view ---
 
 export function ServiceMapView() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [serviceFilter, setServiceFilter] = useState<string | null>(
+    () => searchParams.get("service"),
+  );
+  const [peerFilter, setPeerFilter] = useState<string | null>(
+    () => searchParams.get("peer"),
+  );
+
   const [nodes, setNodes] = useState<Node<ServiceStats>[]>([]);
   const [edges, setEdges] = useState<Edge<ServiceEdgeData>[]>([]);
   const [loading, setLoading] = useState(true);
@@ -488,6 +498,8 @@ export function ServiceMapView() {
     errorsOnly: boolean;
     isImplicit: boolean;
   } | null>(null);
+
+  const filterBarStateRef = useRef<FilterState | undefined>(undefined);
 
   // Simulation refs
   const simRef = useRef<Simulation<ForceNode, SimulationLinkDatum<ForceNode>> | null>(null);
@@ -627,10 +639,21 @@ export function ServiceMapView() {
 
   const fetchData = useCallback(
     async (filters?: FilterState) => {
+      const effectiveFilters = filters ?? filterBarStateRef.current;
       setLoading(true);
       setError(null);
       try {
-        const userQuery = filters?.query && filters.query !== "*" ? filters.query : "";
+        const queryParts: string[] = [];
+        if (effectiveFilters?.query && effectiveFilters.query !== "*") {
+          queryParts.push(effectiveFilters.query);
+        }
+        if (serviceFilter) {
+          queryParts.push(`service_name:"${serviceFilter}"`);
+        }
+        if (peerFilter) {
+          queryParts.push(`span_attributes.peer.service:"${peerFilter}"`);
+        }
+        const userQuery = queryParts.length > 0 ? queryParts.join(" AND ") : "";
         const kindFilter = "(span_kind:3 OR span_kind:4)";
         const baseQuery = userQuery ? `${kindFilter} AND ${userQuery}` : kindFilter;
 
@@ -663,29 +686,21 @@ export function ServiceMapView() {
           search<never>("otel-traces-v0_9", {
             query: baseQuery,
             max_hits: 0,
-            start_timestamp: filters?.startTimestamp,
-            end_timestamp: filters?.endTimestamp,
             aggs: nestedAggs,
           }),
           search<never>("otel-traces-v0_9", {
             query: `${baseQuery} AND span_status.code:2`,
             max_hits: 0,
-            start_timestamp: filters?.startTimestamp,
-            end_timestamp: filters?.endTimestamp,
             aggs: nestedAggs,
           }),
           search<never>("otel-traces-v0_9", {
             query: svcQuery,
             max_hits: 0,
-            start_timestamp: filters?.startTimestamp,
-            end_timestamp: filters?.endTimestamp,
             aggs: svcAggs,
           }),
           search<never>("otel-traces-v0_9", {
             query: svcErrorQuery,
             max_hits: 0,
-            start_timestamp: filters?.startTimestamp,
-            end_timestamp: filters?.endTimestamp,
             aggs: { services: { terms: { field: "service_name", size: 200 } } },
           }),
         ]);
@@ -718,19 +733,43 @@ export function ServiceMapView() {
         setLoading(false);
       }
     },
-    [startSimulation],
+    [startSimulation, serviceFilter, peerFilter],
   );
 
   const handleFilterChange = useCallback(
     (filters: FilterState) => {
+      filterBarStateRef.current = filters;
       fetchData(filters);
     },
     [fetchData],
   );
 
   useEffect(() => {
-    fetchData();
+    if (filterBarStateRef.current) {
+      fetchData(filterBarStateRef.current);
+    }
   }, [fetchData]);
+
+  function clearServiceFilter() {
+    setServiceFilter(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete("service");
+    setSearchParams(next, { replace: true });
+  }
+
+  function clearPeerFilter() {
+    setPeerFilter(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete("peer");
+    setSearchParams(next, { replace: true });
+  }
+
+  const hiddenFilterFields = useMemo(() => {
+    const fields: string[] = [];
+    if (serviceFilter) fields.push("service_name");
+    if (peerFilter) fields.push("span_attributes.peer.service");
+    return fields;
+  }, [serviceFilter, peerFilter]);
 
   // Cleanup simulation on unmount
   useEffect(() => {
@@ -741,7 +780,39 @@ export function ServiceMapView() {
 
   return (
     <div className="flex flex-1 flex-col">
-      <FilterBar index="otel-traces-v0_9" baseQuery="(span_kind:3 OR span_kind:4)" onFilterChange={handleFilterChange} />
+      <FilterBar index="otel-traces-v0_9" baseQuery="(span_kind:3 OR span_kind:4)" onFilterChange={handleFilterChange} additionalHiddenFields={hiddenFilterFields} />
+      {(serviceFilter || peerFilter) && (
+        <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5">
+          {serviceFilter && (
+            <>
+              <span className="text-xs text-muted-foreground">Service:</span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
+                {serviceFilter}
+                <button
+                  onClick={clearServiceFilter}
+                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            </>
+          )}
+          {peerFilter && (
+            <>
+              <span className="text-xs text-muted-foreground">Peer:</span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs font-medium text-foreground">
+                {peerFilter}
+                <button
+                  onClick={clearPeerFilter}
+                  className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            </>
+          )}
+        </div>
+      )}
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           Loading service map…
