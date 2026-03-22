@@ -103,27 +103,23 @@ function serializeTimeParam(sel: TimeSelection): string {
   return sel.key;
 }
 
-function timeSelectionLabel(sel: TimeSelection): string {
-  if (sel.type === "all") return "All time";
-  if (sel.type === "relative") return sel.label;
-  const fmt = (d: Date) =>
-    d.toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  return `${fmt(sel.from)} → ${fmt(sel.to)}`;
-}
-
-/** Convert a Date to a string suitable for datetime-local inputs (YYYY-MM-DDTHH:mm). */
-function toDatetimeLocal(d: Date): string {
+function fmtDate(d: Date): string {
   const y = d.getFullYear();
   const mo = String(d.getMonth() + 1).padStart(2, "0");
   const da = String(d.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${da}`;
+}
+
+function fmtTime(d: Date): string {
   const h = String(d.getHours()).padStart(2, "0");
   const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${y}-${mo}-${da}T${h}:${mi}`;
+  return `${h}:${mi}`;
+}
+
+function timeSelectionLabel(sel: TimeSelection): string {
+  if (sel.type === "all") return "All time";
+  if (sel.type === "relative") return sel.label;
+  return `${fmtDate(sel.from)} ${fmtTime(sel.from)} → ${fmtDate(sel.to)} ${fmtTime(sel.to)}`;
 }
 
 // Fields not useful as user-facing filters
@@ -281,8 +277,10 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     return { type: "relative", ...DEFAULT_PRESET };
   });
   const [timePickerOpen, setTimePickerOpen] = useState(false);
-  const [absFrom, setAbsFrom] = useState("");
-  const [absTo, setAbsTo] = useState("");
+  const [absFromDate, setAbsFromDate] = useState("");
+  const [absFromTime, setAbsFromTime] = useState("00:00");
+  const [absToDate, setAbsToDate] = useState("");
+  const [absToTime, setAbsToTime] = useState("00:00");
   const [discoveredFields, setDiscoveredFields] = useState<DiscoveredField[]>(
     [],
   );
@@ -409,16 +407,22 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
   function handleTimePickerOpen(open: boolean) {
     if (open) {
       if (timeSelection.type === "absolute") {
-        setAbsFrom(toDatetimeLocal(timeSelection.from));
-        setAbsTo(toDatetimeLocal(timeSelection.to));
+        setAbsFromDate(fmtDate(timeSelection.from));
+        setAbsFromTime(fmtTime(timeSelection.from));
+        setAbsToDate(fmtDate(timeSelection.to));
+        setAbsToTime(fmtTime(timeSelection.to));
       } else if (timeSelection.type === "relative") {
         const now = new Date();
         const from = new Date(now.getTime() - timeSelection.seconds * 1000);
-        setAbsFrom(toDatetimeLocal(from));
-        setAbsTo(toDatetimeLocal(now));
+        setAbsFromDate(fmtDate(from));
+        setAbsFromTime("00:00");
+        setAbsToDate(fmtDate(now));
+        setAbsToTime("00:00");
       } else {
-        setAbsFrom("");
-        setAbsTo("");
+        setAbsFromDate("");
+        setAbsFromTime("00:00");
+        setAbsToDate("");
+        setAbsToTime("00:00");
       }
     }
     setTimePickerOpen(open);
@@ -535,35 +539,51 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
             </div>
 
             {/* Right: absolute time range */}
-            <div className="flex flex-col gap-3 p-3" style={{ minWidth: "14rem" }}>
+            <div className="flex flex-col gap-3 p-3" style={{ minWidth: "16rem" }}>
               <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 Absolute time range
               </div>
-              <label className="flex flex-col gap-1">
+              <div className="flex flex-col gap-1">
                 <span className="text-xs text-muted-foreground">From</span>
-                <input
-                  type="datetime-local"
-                  value={absFrom}
-                  onChange={(e) => setAbsFrom(e.target.value)}
-                  className="h-8 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
-                />
-              </label>
-              <label className="flex flex-col gap-1">
+                <div className="flex gap-1.5">
+                  <input
+                    type="date"
+                    value={absFromDate}
+                    onChange={(e) => setAbsFromDate(e.target.value)}
+                    className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                  />
+                  <input
+                    type="time"
+                    value={absFromTime}
+                    onChange={(e) => setAbsFromTime(e.target.value)}
+                    className="h-8 w-20 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
                 <span className="text-xs text-muted-foreground">To</span>
-                <input
-                  type="datetime-local"
-                  value={absTo}
-                  onChange={(e) => setAbsTo(e.target.value)}
-                  className="h-8 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
-                />
-              </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="date"
+                    value={absToDate}
+                    onChange={(e) => setAbsToDate(e.target.value)}
+                    className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                  />
+                  <input
+                    type="time"
+                    value={absToTime}
+                    onChange={(e) => setAbsToTime(e.target.value)}
+                    className="h-8 w-20 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                  />
+                </div>
+              </div>
               <Button
                 size="sm"
                 className="w-full"
-                disabled={!absFrom || !absTo}
+                disabled={!absFromDate || !absToDate}
                 onClick={() => {
-                  const from = new Date(absFrom);
-                  const to = new Date(absTo);
+                  const from = new Date(`${absFromDate}T${absFromTime || "00:00"}`);
+                  const to = new Date(`${absToDate}T${absToTime || "00:00"}`);
                   if (!isNaN(from.getTime()) && !isNaN(to.getTime()) && from < to) {
                     handleTimeChange({ type: "absolute", from, to });
                     setTimePickerOpen(false);

@@ -240,8 +240,8 @@ export function LogsView() {
                     return (
                       <th
                         key={colId}
-                        className={`relative px-4 py-2 font-medium ${align}`}
-                        style={{ width: w }}
+                        className={`relative px-4 py-2 font-medium ${align} overflow-hidden text-ellipsis whitespace-nowrap`}
+                        style={{ width: w, maxWidth: w }}
                       >
                         {label}
                         <ResizeHandle
