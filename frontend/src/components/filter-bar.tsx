@@ -26,6 +26,8 @@ interface FilterBarProps {
   resolvedLabels?: Record<string, string>;
   /** Right-aligned trailing content (e.g. "Service Map" link). */
   trailing?: React.ReactNode;
+  /** Timestamp field used for time range queries and sort. Defaults to "span_start_timestamp_nanos". */
+  timestampField?: string;
 }
 
 interface ActiveFilter {
@@ -78,6 +80,15 @@ const HIDDEN_FIELDS = new Set([
   "events",
   "event_names",
   "links",
+  // Log-specific internal fields
+  "timestamp_nanos",
+  "observed_timestamp_nanos",
+  "dropped_attributes_count",
+  "scope_dropped_attributes_count",
+  "trace_flags",
+  "scope_name",
+  "scope_version",
+  "scope_attributes",
 ]);
 
 /** Format a field path for Quickwit queries and aggregations.
@@ -113,7 +124,7 @@ function collectKeys(obj: unknown, prefix: string, out: Set<string>) {
   }
 }
 
-async function discoverFields(index: IndexId, baseQuery = "*"): Promise<DiscoveredField[]> {
+async function discoverFields(index: IndexId, baseQuery = "*", sortField = "span_start_timestamp_nanos"): Promise<DiscoveredField[]> {
   const fields: DiscoveredField[] = [];
 
   // 1) Top-level fields from index metadata
@@ -140,7 +151,7 @@ async function discoverFields(index: IndexId, baseQuery = "*"): Promise<Discover
       const res = await apiSearch<Record<string, unknown>>(index, {
         query: baseQuery,
         max_hits: 100,
-        sort_by: "-span_start_timestamp_nanos",
+        sort_by: `-${sortField}`,
       });
 
       for (const jsonField of jsonFieldNames) {
@@ -199,7 +210,7 @@ function FilterChip({
   );
 }
 
-export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabels, trailing }: FilterBarProps) {
+export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabels, trailing, timestampField = "span_start_timestamp_nanos" }: FilterBarProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [timePresetIndex, setTimePresetIndex] = useState(() => {
     const fromUrl = searchParams.get("time");
@@ -249,7 +260,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
   // Discover fields on mount / index change
   useEffect(() => {
     let cancelled = false;
-    discoverFields(index, baseQuery)
+    discoverFields(index, baseQuery, timestampField)
       .then((fields) => {
         if (!cancelled) setDiscoveredFields(fields);
       })
@@ -257,7 +268,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     return () => {
       cancelled = true;
     };
-  }, [index, baseQuery]);
+  }, [index, baseQuery, timestampField]);
 
   // Build FilterState from current active filters + time preset.
   const buildFilterState = useCallback(
@@ -268,7 +279,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
         const nowNanos = BigInt(Date.now()) * 1_000_000n;
         const startNanos = nowNanos - BigInt(preset.seconds) * 1_000_000_000n;
         parts.push(
-          `span_start_timestamp_nanos:[${startNanos} TO ${nowNanos}]`,
+          `${timestampField}:[${startNanos} TO ${nowNanos}]`,
         );
       }
       const filterQuery = buildQuery(filters);
@@ -277,7 +288,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
         query: parts.length > 0 ? parts.join(" AND ") : "*",
       };
     },
-    [],
+    [timestampField],
   );
 
   // Fire onFilterChange on mount and whenever filters or time change
