@@ -298,6 +298,8 @@ function SpanDetailPanel({ span }: { span: SpanDocument }) {
 export function TraceDetailView() {
   const { traceId } = useParams<{ traceId: string }>();
   const navigate = useNavigate();
+  // Go back to wherever the user came from (preserves filters/params)
+  const goBack = useCallback(() => navigate(-1), [navigate]);
   const [spans, setSpans] = useState<SpanDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -395,7 +397,7 @@ export function TraceDetailView() {
           No spans found for this trace
         </h2>
         <button
-          onClick={() => navigate("/traces")}
+          onClick={goBack}
           className="text-sm underline hover:text-foreground"
         >
           Back to traces
@@ -409,7 +411,7 @@ export function TraceDetailView() {
       {/* Header bar */}
       <div className="flex items-center gap-3 border-b border-border bg-card px-4 py-2.5">
         <button
-          onClick={() => navigate("/traces")}
+          onClick={goBack}
           className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
