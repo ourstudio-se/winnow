@@ -78,7 +78,7 @@ export function ServiceContextMenu({
           label="Show logs"
           onClick={() => {
             onClose();
-            navigate(`/logs?service=${encodeURIComponent(serviceName)}`);
+            navigate(`/logs?f=${encodeURIComponent(`service_name:${serviceName}`)}`);
           }}
         />
       )}
@@ -89,8 +89,8 @@ export function ServiceContextMenu({
           onClose();
           navigate(
             isImplicit
-              ? `/traces?peer=${encodeURIComponent(serviceName)}`
-              : `/traces?service=${encodeURIComponent(serviceName)}`,
+              ? `/traces?f=${encodeURIComponent(`span_attributes.peer.service:${serviceName}`)}`
+              : `/traces?f=${encodeURIComponent(`service_name:${serviceName}`)}`,
           );
         }}
       />

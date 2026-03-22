@@ -99,6 +99,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] **Persistent time preset** — time picker selection persists across views via URL param (`time`) + localStorage fallback; service map race condition fixed with filterBarStateRef guard; removed unused `startTimestamp`/`endTimestamp` from FilterState and SearchRequest
 - [x] **Cross-view service/peer/trace filters** — "Service Map" links from traces list and trace detail carry `service`, `peer`, and `trace` URL params; service map reads them, scopes all 4 queries, shows dismissable chips, hides from FilterBar field picker
 - [x] **Unified FilterBar URL param filters** — URL param filters (service, peer, fingerprint, status, trace) merged into FilterBar via `urlFilters` prop; single filter row with reactive chips, removed duplicate filter state/clear functions/chip bar from views
+- [x] **All filters URL-persisted** — eliminated dual filter system (local state + URL pseudo-filters); every filter is now a `f=field:value` URL param, persisted across navigation; removed `UrlFilterConfig`, `urlFilters` prop, and all view-specific filter configs; all cross-view links use `f=` params
 - [ ] **Logs view** — search bar + table listing logs, link to associated trace
 - [ ] Verify: can see service map with real edges, click through to traces and logs
 

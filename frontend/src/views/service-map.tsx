@@ -29,7 +29,7 @@ import {
 } from "d3-force";
 import { Server, Database, Globe, Zap, AlertTriangle } from "lucide-react";
 import { search } from "@/lib/api";
-import { FilterBar, type FilterState, type UrlFilterConfig } from "@/components/filter-bar";
+import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { ServiceContextMenu } from "@/components/service-context-menu";
 import { OperationsDrilldownPanel } from "@/components/operations-drilldown";
 
@@ -471,28 +471,6 @@ const edgeTypes = { service: ServiceEdge };
 
 // --- Main view ---
 
-const SERVICE_MAP_URL_FILTERS: UrlFilterConfig[] = [
-  {
-    param: "service",
-    label: "Service",
-    hiddenField: "service_name",
-    buildClause: (v) => `service_name:"${v}"`,
-  },
-  {
-    param: "peer",
-    label: "Peer",
-    hiddenField: "span_attributes.peer.service",
-    buildClause: (v) => `span_attributes.peer.service:"${v}"`,
-  },
-  {
-    param: "trace",
-    label: "Trace",
-    hiddenField: "trace_id",
-    buildClause: (v) => `trace_id:${v}`,
-    renderValue: (v) => ({ text: v.slice(0, 16) + "...", className: "font-mono" }),
-  },
-];
-
 export function ServiceMapView() {
   const [nodes, setNodes] = useState<Node<ServiceStats>[]>([]);
   const [edges, setEdges] = useState<Edge<ServiceEdgeData>[]>([]);
@@ -762,7 +740,6 @@ export function ServiceMapView() {
         index="otel-traces-v0_9"
         baseQuery="(span_kind:3 OR span_kind:4)"
         onFilterChange={handleFilterChange}
-        urlFilters={SERVICE_MAP_URL_FILTERS}
       />
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">

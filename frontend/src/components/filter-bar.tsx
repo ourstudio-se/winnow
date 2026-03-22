@@ -17,22 +17,12 @@ export interface FilterState {
   query: string;
 }
 
-export interface UrlFilterConfig {
-  param: string;
-  label: string;
-  buildClause: (value: string) => string;
-  hiddenField?: string;
-  renderValue?: (value: string) => { text: string; className?: string };
-}
-
 interface FilterBarProps {
   index: IndexId;
   onFilterChange: (filters: FilterState) => void;
   /** Optional base query to scope autocomplete suggestions (e.g. "span_kind:3"). Defaults to "*". */
   baseQuery?: string;
-  /** URL params to treat as filters. Derived reactively from searchParams. */
-  urlFilters?: UrlFilterConfig[];
-  /** View-provided display overrides for URL filter values (e.g. fingerprint → span name). */
+  /** View-provided display overrides for filter values keyed by field name (e.g. span_fingerprint → span name). */
   resolvedLabels?: Record<string, string>;
   /** Right-aligned trailing content (e.g. "Service Map" link). */
   trailing?: React.ReactNode;
@@ -187,16 +177,18 @@ function buildQuery(filters: ActiveFilter[]): string {
 
 function FilterChip({
   filter,
+  resolvedLabel,
   onRemove,
 }: {
   filter: ActiveFilter;
+  resolvedLabel?: string;
   onRemove: () => void;
 }) {
   return (
     <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs text-foreground">
       <span className="text-muted-foreground">{filter.field}</span>
       <span>=</span>
-      <span className="font-medium">{filter.value}</span>
+      <span className="font-medium">{resolvedLabel ?? filter.value}</span>
       <button
         onClick={onRemove}
         className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -207,9 +199,8 @@ function FilterChip({
   );
 }
 
-export function FilterBar({ index, onFilterChange, baseQuery = "*", urlFilters, resolvedLabels, trailing }: FilterBarProps) {
+export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabels, trailing }: FilterBarProps) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
   const [timePresetIndex, setTimePresetIndex] = useState(() => {
     const fromUrl = searchParams.get("time");
     if (fromUrl) return presetKeyToIndex(fromUrl);
@@ -231,13 +222,17 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", urlFilters, 
   const [valuesLoading, setValuesLoading] = useState(false);
   const valueInputRef = useRef<HTMLInputElement>(null);
 
-  // Derive active URL filter values reactively from searchParams
-  const activeUrlFilters = useMemo(() => {
-    if (!urlFilters) return [];
-    return urlFilters
-      .map((config) => ({ config, value: searchParams.get(config.param) }))
-      .filter((f): f is { config: UrlFilterConfig; value: string } => f.value != null);
-  }, [urlFilters, searchParams]);
+  // Derive active filters from URL params
+  const activeFilters = useMemo(() => {
+    return searchParams.getAll("f").map((raw) => {
+      const colonIdx = raw.indexOf(":");
+      return {
+        field: colonIdx >= 0 ? raw.slice(0, colonIdx) : raw,
+        value: colonIdx >= 0 ? raw.slice(colonIdx + 1) : "",
+        kind: "text" as const,
+      };
+    });
+  }, [searchParams]);
 
   // Sync URL param on mount if missing (populate from resolved value)
   useEffect(() => {
@@ -265,11 +260,8 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", urlFilters, 
   }, [index, baseQuery]);
 
   // Build FilterState from current active filters + time preset.
-  // Time range is embedded as a nanos range clause in the query string
-  // (the traces index uses u64 timestamps, not datetime, so Quickwit's
-  // start_timestamp/end_timestamp params don't apply).
   const buildFilterState = useCallback(
-    (filters: ActiveFilter[], presetIdx: number, urlClauses: string[]): FilterState => {
+    (filters: ActiveFilter[], presetIdx: number): FilterState => {
       const preset = TIME_PRESETS[presetIdx];
       const parts: string[] = [];
       if (preset.seconds != null) {
@@ -281,7 +273,6 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", urlFilters, 
       }
       const filterQuery = buildQuery(filters);
       if (filterQuery !== "*") parts.push(filterQuery);
-      for (const clause of urlClauses) parts.push(clause);
       return {
         query: parts.length > 0 ? parts.join(" AND ") : "*",
       };
@@ -289,46 +280,42 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", urlFilters, 
     [],
   );
 
-  // Compute current URL clauses
-  const urlClauses = useMemo(
-    () => activeUrlFilters.map((f) => f.config.buildClause(f.value)),
-    [activeUrlFilters],
-  );
-
-  // Fire onFilterChange on mount and whenever URL filters change
-  const prevUrlClausesRef = useRef<string | null>(null);
+  // Fire onFilterChange on mount and whenever filters or time change
+  const prevFilterKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = urlClauses.join("\0");
-    if (key !== prevUrlClausesRef.current) {
-      prevUrlClausesRef.current = key;
-      onFilterChange(buildFilterState(activeFilters, timePresetIndex, urlClauses));
+    const key = searchParams.getAll("f").join("\0") + "\0" + timePresetIndex;
+    if (key !== prevFilterKeyRef.current) {
+      prevFilterKeyRef.current = key;
+      onFilterChange(buildFilterState(activeFilters, timePresetIndex));
     }
-  }, [urlClauses, activeFilters, timePresetIndex, buildFilterState, onFilterChange]);
+  }, [activeFilters, timePresetIndex, buildFilterState, onFilterChange, searchParams]);
 
   function addFilter(field: DiscoveredField, value: string) {
     const trimmed = value.trim();
     if (!trimmed && field.kind === "text") return;
-    const newFilter: ActiveFilter = {
-      field: field.field,
-      value: field.kind === "bool" ? trimmed : trimmed,
-      kind: field.kind,
-    };
-    const next = [...activeFilters, newFilter];
-    setActiveFilters(next);
-    onFilterChange(buildFilterState(next, timePresetIndex, urlClauses));
-  }
-
-  function removeFilter(idx: number) {
-    const next = activeFilters.filter((_, i) => i !== idx);
-    setActiveFilters(next);
-    onFilterChange(buildFilterState(next, timePresetIndex, urlClauses));
-  }
-
-  function removeUrlFilter(param: string) {
     const next = new URLSearchParams(searchParams);
-    next.delete(param);
+    // Remove any existing filter on the same field
+    const existing = next.getAll("f");
+    next.delete("f");
+    for (const f of existing) {
+      const colonIdx = f.indexOf(":");
+      const fField = colonIdx >= 0 ? f.slice(0, colonIdx) : f;
+      if (fField !== field.field) next.append("f", f);
+    }
+    next.append("f", `${field.field}:${trimmed}`);
     setSearchParams(next, { replace: true });
-    // onFilterChange will fire via the useEffect that watches urlClauses
+  }
+
+  function removeFilter(field: string) {
+    const next = new URLSearchParams(searchParams);
+    const existing = next.getAll("f");
+    next.delete("f");
+    for (const f of existing) {
+      const colonIdx = f.indexOf(":");
+      const fField = colonIdx >= 0 ? f.slice(0, colonIdx) : f;
+      if (fField !== field) next.append("f", f);
+    }
+    setSearchParams(next, { replace: true });
   }
 
   function handleTimePresetChange(newIndex: number) {
@@ -338,7 +325,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", urlFilters, 
     const next = new URLSearchParams(searchParams);
     next.set("time", key);
     setSearchParams(next, { replace: true });
-    onFilterChange(buildFilterState(activeFilters, newIndex, urlClauses));
+    onFilterChange(buildFilterState(activeFilters, newIndex));
   }
 
   // Reset popover state when it closes
@@ -383,17 +370,14 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", urlFilters, 
     setPopoverOpen(false);
   }
 
-  // Filtered field list for the search
+  // Filtered field list — hide fields that already have active filters
   const filteredFields = useMemo(() => {
-    let fields = discoveredFields;
-    const hidden = new Set(
-      activeUrlFilters.map((f) => f.config.hiddenField).filter(Boolean) as string[],
-    );
-    if (hidden.size > 0) fields = fields.filter((f) => !hidden.has(f.field));
+    const activeFieldSet = new Set(activeFilters.map((f) => f.field));
+    let fields = discoveredFields.filter((f) => !activeFieldSet.has(f.field));
     if (!fieldSearch) return fields;
     const lower = fieldSearch.toLowerCase();
     return fields.filter((f) => f.field.toLowerCase().includes(lower));
-  }, [discoveredFields, fieldSearch, activeUrlFilters]);
+  }, [discoveredFields, fieldSearch, activeFilters]);
 
   const filteredValues = useMemo(() => {
     if (!valueInput) return suggestedValues;
@@ -416,30 +400,14 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", urlFilters, 
         ))}
       </select>
 
-      {/* URL filter chips */}
-      {activeUrlFilters.map(({ config, value }) => {
-        const resolved = resolvedLabels?.[config.param];
-        const rendered = config.renderValue?.(value);
-        const displayText = resolved ?? rendered?.text ?? value;
-        const className = !resolved ? rendered?.className : undefined;
-        return (
-          <span key={config.param} className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-xs text-foreground">
-            <span className="text-muted-foreground">{config.label}</span>
-            <span>=</span>
-            <span className={`font-medium ${className ?? ""}`}>{displayText}</span>
-            <button
-              onClick={() => removeUrlFilter(config.param)}
-              className="ml-0.5 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        );
-      })}
-
       {/* Active filter chips */}
-      {activeFilters.map((f, i) => (
-        <FilterChip key={`${f.field}-${i}`} filter={f} onRemove={() => removeFilter(i)} />
+      {activeFilters.map((f) => (
+        <FilterChip
+          key={f.field}
+          filter={f}
+          resolvedLabel={resolvedLabels?.[f.field]}
+          onRemove={() => removeFilter(f.field)}
+        />
       ))}
 
       {/* Add filter popover */}

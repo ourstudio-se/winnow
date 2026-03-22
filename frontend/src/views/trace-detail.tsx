@@ -230,7 +230,7 @@ function SpanDetailPanel({ span }: { span: SpanDocument }) {
           {hasError && <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />}
         </div>
         <Link
-          to={`/traces?service=${encodeURIComponent(span.service_name)}`}
+          to={`/traces?f=${encodeURIComponent(`service_name:${span.service_name}`)}`}
           className="mt-0.5 block text-xs text-muted-foreground underline decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
         >
           {span.service_name}
@@ -420,7 +420,7 @@ export function TraceDetailView() {
           {rootServiceName && (
             <>
               <Link
-                to={`/traces?service=${encodeURIComponent(rootServiceName)}`}
+                to={`/traces?f=${encodeURIComponent(`service_name:${rootServiceName}`)}`}
                 className="font-medium underline decoration-muted-foreground/30 hover:decoration-foreground"
               >
                 {rootServiceName}
@@ -443,7 +443,7 @@ export function TraceDetailView() {
           </span>
         </div>
         <Link
-          to={`/?trace=${traceId}`}
+          to={`/?f=${encodeURIComponent(`trace_id:${traceId}`)}`}
           className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <Map className="h-3 w-3" />

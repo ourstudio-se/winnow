@@ -212,13 +212,13 @@ export function OperationsDrilldownPanel({
               op={op}
               onClick={() => {
                 const params = new URLSearchParams();
-                if (isImplicit) {
-                  params.set("peer", serviceName);
-                } else {
-                  params.set("service", serviceName);
+                params.append("f", isImplicit
+                  ? `span_attributes.peer.service:${serviceName}`
+                  : `service_name:${serviceName}`);
+                params.append("f", `span_fingerprint:${op.fingerprint}`);
+                if (op.status === "error") {
+                  params.append("f", "span_status.code:2");
                 }
-                params.set("fingerprint", op.fingerprint);
-                params.set("status", op.status);
                 navigate(`/traces?${params.toString()}`);
               }}
             />

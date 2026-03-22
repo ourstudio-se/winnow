@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router";
 import { AlertCircle, Map } from "lucide-react";
 import { search } from "@/lib/api";
-import { FilterBar, type FilterState, type UrlFilterConfig } from "@/components/filter-bar";
+import { FilterBar, type FilterState } from "@/components/filter-bar";
 import {
   type SpanDocument,
   type TraceSummary,
@@ -10,37 +10,6 @@ import {
   formatDuration,
   formatTimestamp,
 } from "@/lib/traces";
-
-const TRACES_URL_FILTERS: UrlFilterConfig[] = [
-  {
-    param: "service",
-    label: "Service",
-    hiddenField: "service_name",
-    buildClause: (v) => `service_name:"${v}"`,
-  },
-  {
-    param: "peer",
-    label: "Peer",
-    hiddenField: "span_attributes.peer.service",
-    buildClause: (v) => `(span_kind:3 OR span_kind:4) AND span_attributes.peer.service:"${v}"`,
-  },
-  {
-    param: "fingerprint",
-    label: "Operation",
-    hiddenField: "span_fingerprint",
-    buildClause: (v) => `span_fingerprint:"${v}"`,
-    renderValue: (v) => ({ text: v.slice(0, 12) + "...", className: "font-mono" }),
-  },
-  {
-    param: "status",
-    label: "Status",
-    buildClause: (v) => v === "error" ? "span_status.code:2" : "NOT span_status.code:2",
-    renderValue: (v) =>
-      v === "error"
-        ? { text: "Errors", className: "text-red-400" }
-        : { text: "OK", className: "text-emerald-400" },
-  },
-];
 
 export function TracesView() {
   const navigate = useNavigate();
@@ -70,10 +39,11 @@ export function TracesView() {
         setNumHits(res.num_hits);
         setTraces(groupSpansByTrace(res.hits));
         // Resolve fingerprint → human-readable span name from first matching hit
-        const fp = searchParams.get("fingerprint");
-        if (fp && res.hits.length > 0) {
-          const match = res.hits.find((h) => h.span_fingerprint === fp);
-          if (match) setResolvedLabels((prev) => ({ ...prev, fingerprint: match.span_name }));
+        const fpFilter = searchParams.getAll("f").find(f => f.startsWith("span_fingerprint:"));
+        if (fpFilter && res.hits.length > 0) {
+          const fpValue = fpFilter.slice("span_fingerprint:".length);
+          const match = res.hits.find((h) => h.span_fingerprint === fpValue);
+          if (match) setResolvedLabels((prev) => ({ ...prev, span_fingerprint: match.span_name }));
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to fetch traces");
@@ -93,15 +63,16 @@ export function TracesView() {
   );
 
   const serviceMapLink = useMemo(() => {
-    const svc = searchParams.get("service");
-    const peer = searchParams.get("peer");
-    if (!svc && !peer) return null;
     const p = new URLSearchParams();
-    if (svc) p.set("service", svc);
-    if (peer) p.set("peer", peer);
+    const time = searchParams.get("time");
+    if (time) p.set("time", time);
+    for (const f of searchParams.getAll("f")) {
+      p.append("f", f);
+    }
+    const qs = p.toString();
     return (
       <Link
-        to={`/?${p}`}
+        to={qs ? `/?${qs}` : "/"}
         className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
       >
         <Map className="h-3 w-3" />
@@ -115,7 +86,6 @@ export function TracesView() {
       <FilterBar
         index="otel-traces-v0_9"
         onFilterChange={handleFilterChange}
-        urlFilters={TRACES_URL_FILTERS}
         resolvedLabels={resolvedLabels}
         trailing={serviceMapLink}
       />
@@ -176,7 +146,13 @@ export function TracesView() {
                         onClick={(e) => {
                           e.stopPropagation();
                           const next = new URLSearchParams(searchParams);
-                          next.set("service", trace.rootServiceName);
+                          // Remove existing service_name filter, add new one
+                          const existing = next.getAll("f");
+                          next.delete("f");
+                          for (const f of existing) {
+                            if (!f.startsWith("service_name:")) next.append("f", f);
+                          }
+                          next.append("f", `service_name:${trace.rootServiceName}`);
                           setSearchParams(next, { replace: true });
                         }}
                         className="font-medium underline decoration-muted-foreground/30 hover:decoration-foreground"
