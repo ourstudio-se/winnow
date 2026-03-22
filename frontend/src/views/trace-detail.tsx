@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams, Link } from "react-router";
-import { ArrowLeft, AlertCircle, ChevronDown, ChevronRight, Map, ExternalLink } from "lucide-react";
+import { ArrowLeft, AlertCircle, ChevronDown, ChevronRight, Map, ExternalLink, ListTree } from "lucide-react";
 import { search } from "@/lib/api";
 import {
   type SpanDocument,
@@ -79,7 +79,10 @@ function WaterfallRow({
     <div
       onClick={onClick}
       className={`flex cursor-pointer border-b border-border/30 hover:bg-muted/20 ${isSelected ? "bg-muted/40" : ""}`}
-      style={{ height: 28 }}
+      style={{
+        height: 28,
+        borderLeft: isSelected ? `3px solid ${color}` : "3px solid transparent",
+      }}
     >
       {/* Label area — 30% */}
       <div
@@ -524,8 +527,15 @@ export function TraceDetailView() {
           </span>
         </div>
         <Link
-          to={`/?f=${encodeURIComponent(`trace_id:${traceId}`)}`}
+          to={`/logs?f=${encodeURIComponent(`trace_id:${traceId}`)}`}
           className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <ListTree className="h-3 w-3" />
+          Trace Logs
+        </Link>
+        <Link
+          to={`/?f=${encodeURIComponent(`trace_id:${traceId}`)}`}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <Map className="h-3 w-3" />
           Service Map
