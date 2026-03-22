@@ -11,32 +11,43 @@ import {
   formatTimestamp,
 } from "@/lib/traces";
 
+const PAGE_SIZE = 200;
+
 export function TracesView() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [spans, setSpans] = useState<SpanDocument[]>([]);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [numHits, setNumHits] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const filterBarStateRef = useRef<FilterState | undefined>(undefined);
   const [resolvedLabels, setResolvedLabels] = useState<Record<string, string>>({});
 
+  const getBaseQuery = useCallback(
+    (filters?: FilterState) => {
+      const effectiveFilters = filters ?? filterBarStateRef.current;
+      return effectiveFilters?.query && effectiveFilters.query !== "*"
+        ? effectiveFilters.query
+        : "*";
+    },
+    [],
+  );
+
   const fetchData = useCallback(
     async (filters?: FilterState) => {
-      const effectiveFilters = filters ?? filterBarStateRef.current;
       setLoading(true);
       setError(null);
       try {
-        const query =
-          effectiveFilters?.query && effectiveFilters.query !== "*"
-            ? effectiveFilters.query
-            : "*";
+        const query = getBaseQuery(filters);
         const res = await search<SpanDocument>("otel-traces-v0_9", {
           query,
-          max_hits: 200,
+          max_hits: PAGE_SIZE,
           sort_by: "-span_start_timestamp_nanos",
         });
         setNumHits(res.num_hits);
+        setSpans(res.hits);
         setTraces(groupSpansByTrace(res.hits));
         // Resolve fingerprint → human-readable span name from first matching hit
         const fpFilter = searchParams.getAll("f").find(f => f.startsWith("span_fingerprint:"));
@@ -51,8 +62,33 @@ export function TracesView() {
         setLoading(false);
       }
     },
-    [searchParams],
+    [searchParams, getBaseQuery],
   );
+
+  const loadMore = useCallback(async () => {
+    if (spans.length === 0) return;
+    const lastTs = spans[spans.length - 1].span_start_timestamp_nanos;
+    const base = getBaseQuery();
+    const cursorQuery = base === "*"
+      ? `span_start_timestamp_nanos:<${lastTs}`
+      : `${base} AND span_start_timestamp_nanos:<${lastTs}`;
+
+    setLoadingMore(true);
+    try {
+      const res = await search<SpanDocument>("otel-traces-v0_9", {
+        query: cursorQuery,
+        max_hits: PAGE_SIZE,
+        sort_by: "-span_start_timestamp_nanos",
+      });
+      const allSpans = [...spans, ...res.hits];
+      setSpans(allSpans);
+      setTraces(groupSpansByTrace(allSpans));
+    } catch {
+      // Silently fail — user can retry
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [getBaseQuery, spans]);
 
   const handleFilterChange = useCallback(
     (filters: FilterState) => {
@@ -81,8 +117,10 @@ export function TracesView() {
     );
   }, [searchParams]);
 
+  const hasMore = numHits > spans.length;
+
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col overflow-hidden">
       <FilterBar
         index="otel-traces-v0_9"
         onFilterChange={handleFilterChange}
@@ -114,9 +152,9 @@ export function TracesView() {
         </div>
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden">
-          {numHits > 200 && (
+          {hasMore && (
             <div className="border-b border-border bg-muted/30 px-4 py-1.5 text-xs text-muted-foreground">
-              Showing traces from 200 of {numHits.toLocaleString()} matching spans
+              Showing traces from {spans.length.toLocaleString()} of {numHits.toLocaleString()} matching spans
             </div>
           )}
           <div className="flex-1 overflow-y-auto">
@@ -185,6 +223,19 @@ export function TracesView() {
                 ))}
               </tbody>
             </table>
+            {hasMore && (
+              <div className="flex justify-center border-t border-border py-3">
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+                >
+                  {loadingMore
+                    ? "Loading..."
+                    : `Load ${Math.min(PAGE_SIZE, numHits - spans.length).toLocaleString()} more spans`}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

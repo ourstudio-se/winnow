@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, Link } from "react-router";
 import { ListTree, ExternalLink } from "lucide-react";
 import { search } from "@/lib/api";
@@ -6,44 +6,109 @@ import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { formatTimestamp } from "@/lib/traces";
 import {
   type LogDocument,
+  type LogColumnDef,
   extractBody,
   severityColor,
+  discoverDataFields,
+  getFieldValue,
+  loadColumns,
+  saveColumns,
+  PSEUDO_COLUMNS,
 } from "@/lib/logs";
+import { useSidebarPanel } from "@/lib/sidebar-context";
+import { ColumnSelector } from "@/components/column-selector";
+
+const PAGE_SIZE = 200;
 
 export function LogsView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [logs, setLogs] = useState<LogDocument[]>([]);
   const [numHits, setNumHits] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const filterBarStateRef = useRef<FilterState | undefined>(undefined);
   const [expandedLogIdx, setExpandedLogIdx] = useState<number | null>(null);
 
+  // Column state
+  const [columns, setColumns] = useState<string[]>(loadColumns);
+  const [discoveredFields, setDiscoveredFields] = useState<LogColumnDef[]>([]);
+
+  // Persist columns to localStorage
+  const handleColumnsChange = useCallback((newColumns: string[]) => {
+    setColumns(newColumns);
+    saveColumns(newColumns);
+  }, []);
+
+  // Sidebar panel injection
+  const { setPanelContent } = useSidebarPanel();
+  useEffect(() => {
+    setPanelContent(
+      <ColumnSelector
+        activeColumns={columns}
+        availableData={discoveredFields}
+        onColumnsChange={handleColumnsChange}
+      />,
+    );
+    return () => setPanelContent(null);
+  }, [columns, discoveredFields, handleColumnsChange, setPanelContent]);
+
+  // Resolve the base query from current filters (or the last known filters)
+  const getBaseQuery = useCallback((filters?: FilterState) => {
+    const effectiveFilters = filters ?? filterBarStateRef.current;
+    return effectiveFilters?.query && effectiveFilters.query !== "*"
+      ? effectiveFilters.query
+      : "*";
+  }, []);
+
   const fetchData = useCallback(
     async (filters?: FilterState) => {
-      const effectiveFilters = filters ?? filterBarStateRef.current;
       setLoading(true);
       setError(null);
       try {
-        const query =
-          effectiveFilters?.query && effectiveFilters.query !== "*"
-            ? effectiveFilters.query
-            : "*";
         const res = await search<LogDocument>("otel-logs-v0_9", {
-          query,
-          max_hits: 200,
+          query: getBaseQuery(filters),
+          max_hits: PAGE_SIZE,
           sort_by: "-timestamp_nanos",
         });
         setNumHits(res.num_hits);
         setLogs(res.hits);
+        setDiscoveredFields(discoverDataFields(res.hits));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to fetch logs");
       } finally {
         setLoading(false);
       }
     },
-    [],
+    [getBaseQuery],
   );
+
+  const loadMore = useCallback(async () => {
+    if (logs.length === 0) return;
+    const lastTs = logs[logs.length - 1].timestamp_nanos;
+    // Narrow the existing query with a cursor — strictly less than the last
+    // seen timestamp, so this can never exceed the time picker bounds.
+    const base = getBaseQuery();
+    const cursorQuery = base === "*"
+      ? `timestamp_nanos:<${lastTs}`
+      : `${base} AND timestamp_nanos:<${lastTs}`;
+
+    setLoadingMore(true);
+    try {
+      const res = await search<LogDocument>("otel-logs-v0_9", {
+        query: cursorQuery,
+        max_hits: PAGE_SIZE,
+        sort_by: "-timestamp_nanos",
+      });
+      const allLogs = [...logs, ...res.hits];
+      setLogs(allLogs);
+      setDiscoveredFields(discoverDataFields(allLogs));
+    } catch {
+      // Silently fail — user can retry
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [getBaseQuery, logs]);
 
   const handleFilterChange = useCallback(
     (filters: FilterState) => {
@@ -72,8 +137,17 @@ export function LogsView() {
     );
   }, [searchParams]);
 
+  // Resolve column defs for current active columns
+  const pseudoMap = useMemo(() => {
+    const m = new Map<string, LogColumnDef>();
+    for (const c of PSEUDO_COLUMNS) m.set(c.id, c);
+    return m;
+  }, []);
+
+  const columnCount = columns.length;
+
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col overflow-hidden">
       <FilterBar
         index="otel-logs-v0_9"
         timestampField="timestamp_nanos"
@@ -105,20 +179,25 @@ export function LogsView() {
         </div>
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden">
-          {numHits > 200 && (
+          {numHits > logs.length && (
             <div className="border-b border-border bg-muted/30 px-4 py-1.5 text-xs text-muted-foreground">
-              Showing 200 of {numHits.toLocaleString()} matching logs
+              Showing {logs.length.toLocaleString()} of {numHits.toLocaleString()} matching logs
             </div>
           )}
           <div className="flex-1 overflow-y-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-10 border-b border-border bg-card text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2 text-left font-medium">Timestamp</th>
-                  <th className="px-4 py-2 text-left font-medium">Severity</th>
-                  <th className="px-4 py-2 text-left font-medium">Service</th>
-                  <th className="px-4 py-2 text-left font-medium">Message</th>
-                  <th className="px-4 py-2 text-center font-medium">Trace</th>
+                  {columns.map((colId) => {
+                    const pseudo = pseudoMap.get(colId);
+                    const label = pseudo?.label ?? colId;
+                    const align = colId === "_trace" ? "text-center" : "text-left";
+                    return (
+                      <th key={colId} className={`px-4 py-2 font-medium ${align}`}>
+                        {label}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -128,6 +207,8 @@ export function LogsView() {
                     <LogRow
                       key={idx}
                       log={log}
+                      columns={columns}
+                      columnCount={columnCount}
                       isExpanded={isExpanded}
                       onToggle={() =>
                         setExpandedLogIdx(isExpanded ? null : idx)
@@ -148,6 +229,19 @@ export function LogsView() {
                 })}
               </tbody>
             </table>
+            {numHits > logs.length && (
+              <div className="flex justify-center border-t border-border py-3">
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+                >
+                  {loadingMore
+                    ? "Loading..."
+                    : `Load ${Math.min(PAGE_SIZE, numHits - logs.length).toLocaleString()} more logs`}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -157,11 +251,15 @@ export function LogsView() {
 
 function LogRow({
   log,
+  columns,
+  columnCount,
   isExpanded,
   onToggle,
   onServiceClick,
 }: {
   log: LogDocument;
+  columns: string[];
+  columnCount: number;
   isExpanded: boolean;
   onToggle: () => void;
   onServiceClick: (serviceName: string) => void;
@@ -174,9 +272,47 @@ function LogRow({
         onClick={onToggle}
         className="cursor-pointer border-b border-border/50 hover:bg-muted/30"
       >
+        {columns.map((colId) => (
+          <LogCell
+            key={colId}
+            colId={colId}
+            log={log}
+            bodyText={bodyText}
+            onServiceClick={onServiceClick}
+          />
+        ))}
+      </tr>
+      {isExpanded && (
+        <tr className="border-b border-border/50 bg-muted/20">
+          <td colSpan={columnCount} className="px-4 py-3">
+            <LogDetail log={log} bodyText={bodyText} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function LogCell({
+  colId,
+  log,
+  bodyText,
+  onServiceClick,
+}: {
+  colId: string;
+  log: LogDocument;
+  bodyText: string;
+  onServiceClick: (serviceName: string) => void;
+}) {
+  switch (colId) {
+    case "_timestamp":
+      return (
         <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
           {formatTimestamp(log.timestamp_nanos)}
         </td>
+      );
+    case "_severity":
+      return (
         <td className="px-4 py-2">
           <span
             className={`text-xs font-medium ${severityColor(log.severity_text)}`}
@@ -184,6 +320,9 @@ function LogRow({
             {log.severity_text || `SEV${log.severity_number}`}
           </span>
         </td>
+      );
+    case "_service":
+      return (
         <td className="px-4 py-2">
           <span
             onClick={(e) => {
@@ -195,9 +334,15 @@ function LogRow({
             {log.service_name}
           </span>
         </td>
+      );
+    case "_message":
+      return (
         <td className="max-w-md truncate px-4 py-2 text-muted-foreground">
           {bodyText}
         </td>
+      );
+    case "_trace":
+      return (
         <td className="px-4 py-2 text-center">
           {log.trace_id ? (
             <Link
@@ -209,16 +354,15 @@ function LogRow({
             </Link>
           ) : null}
         </td>
-      </tr>
-      {isExpanded && (
-        <tr className="border-b border-border/50 bg-muted/20">
-          <td colSpan={5} className="px-4 py-3">
-            <LogDetail log={log} bodyText={bodyText} />
-          </td>
-        </tr>
-      )}
-    </>
-  );
+      );
+    default:
+      // Data field
+      return (
+        <td className="max-w-xs truncate px-4 py-2 font-mono text-xs text-muted-foreground">
+          {getFieldValue(log, colId)}
+        </td>
+      );
+  }
 }
 
 function LogDetail({

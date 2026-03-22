@@ -20,6 +20,7 @@ export interface IndexMetadataResponse {
 export interface SearchRequest {
   query: string;
   max_hits?: number;
+  start_offset?: number;
   sort_by?: string;
   aggs?: Record<string, unknown>;
 }
