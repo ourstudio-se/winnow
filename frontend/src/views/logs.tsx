@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, Link } from "react-router";
-import { ListTree, ExternalLink } from "lucide-react";
+import { ListTree, ExternalLink, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { search } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { formatTimestamp } from "@/lib/traces";
 import {
   type LogDocument,
   type LogColumnDef,
+  type SortDirection,
   extractBody,
   severityColor,
   discoverDataFields,
@@ -16,7 +17,10 @@ import {
   loadColumnWidths,
   saveColumnWidths,
   getColumnWidth,
+  loadLogSort,
+  saveLogSort,
   PSEUDO_COLUMNS,
+  PSEUDO_SORT_FIELDS,
 } from "@/lib/logs";
 import { useSidebarPanel } from "@/lib/sidebar-context";
 import { ColumnSelector } from "@/components/column-selector";
@@ -38,6 +42,10 @@ export function LogsView() {
   const [columns, setColumns] = useState<string[]>(loadColumns);
   const [discoveredFields, setDiscoveredFields] = useState<LogColumnDef[]>([]);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>(loadColumnWidths);
+
+  // Sort state
+  const [sortField, setSortField] = useState<string | null>(() => loadLogSort()?.field ?? null);
+  const [sortDir, setSortDir] = useState<SortDirection>(() => loadLogSort()?.dir ?? "desc");
 
   // Measure scroll container so the table always fills at least 100%
   const [containerWidth, setContainerWidth] = useState(0);
@@ -102,6 +110,14 @@ export function LogsView() {
       : "*";
   }, []);
 
+  const buildSortBy = useCallback(
+    (field: string | null, dir: SortDirection) => {
+      if (!field) return "-timestamp_nanos";
+      return dir === "desc" ? `-${field}` : field;
+    },
+    [],
+  );
+
   const fetchData = useCallback(
     async (filters?: FilterState) => {
       setLoading(true);
@@ -110,7 +126,7 @@ export function LogsView() {
         const res = await search<LogDocument>("otel-logs-v0_9", {
           query: getBaseQuery(filters),
           max_hits: PAGE_SIZE,
-          sort_by: "-timestamp_nanos",
+          sort_by: buildSortBy(sortField, sortDir),
         });
         setNumHits(res.num_hits);
         setLogs(res.hits);
@@ -121,26 +137,36 @@ export function LogsView() {
         setLoading(false);
       }
     },
-    [getBaseQuery],
+    [getBaseQuery, buildSortBy, sortField, sortDir],
   );
 
   const loadMore = useCallback(async () => {
     if (logs.length === 0) return;
-    const lastTs = logs[logs.length - 1].timestamp_nanos;
-    // Narrow the existing query with a cursor — strictly less than the last
-    // seen timestamp, so this can never exceed the time picker bounds.
-    const base = getBaseQuery();
-    const cursorQuery = base === "*"
-      ? `timestamp_nanos:<${lastTs}`
-      : `${base} AND timestamp_nanos:<${lastTs}`;
 
     setLoadingMore(true);
     try {
-      const res = await search<LogDocument>("otel-logs-v0_9", {
-        query: cursorQuery,
-        max_hits: PAGE_SIZE,
-        sort_by: "-timestamp_nanos",
-      });
+      let res;
+      if (!sortField) {
+        // Default sort (timestamp desc): use cursor-based pagination
+        const lastTs = logs[logs.length - 1].timestamp_nanos;
+        const base = getBaseQuery();
+        const cursorQuery = base === "*"
+          ? `timestamp_nanos:<${lastTs}`
+          : `${base} AND timestamp_nanos:<${lastTs}`;
+        res = await search<LogDocument>("otel-logs-v0_9", {
+          query: cursorQuery,
+          max_hits: PAGE_SIZE,
+          sort_by: "-timestamp_nanos",
+        });
+      } else {
+        // Custom sort: use start_offset pagination
+        res = await search<LogDocument>("otel-logs-v0_9", {
+          query: getBaseQuery(),
+          max_hits: PAGE_SIZE,
+          sort_by: buildSortBy(sortField, sortDir),
+          start_offset: logs.length,
+        });
+      }
       const allLogs = [...logs, ...res.hits];
       setLogs(allLogs);
       setDiscoveredFields(discoverDataFields(allLogs));
@@ -149,7 +175,7 @@ export function LogsView() {
     } finally {
       setLoadingMore(false);
     }
-  }, [getBaseQuery, logs]);
+  }, [getBaseQuery, buildSortBy, sortField, sortDir, logs]);
 
   const handleFilterChange = useCallback(
     (filters: FilterState) => {
@@ -158,6 +184,45 @@ export function LogsView() {
     },
     [fetchData],
   );
+
+  const handleSort = useCallback(
+    (colId: string) => {
+      const qwField = PSEUDO_SORT_FIELDS[colId];
+      if (qwField === undefined) return; // not sortable
+
+      let nextField: string | null;
+      let nextDir: SortDirection;
+
+      if (sortField === qwField && sortDir === "desc") {
+        // desc → asc
+        nextField = qwField;
+        nextDir = "asc";
+      } else if (sortField === qwField && sortDir === "asc") {
+        // asc → reset to default
+        nextField = null;
+        nextDir = "desc";
+      } else {
+        // different field or no sort → sort this field desc
+        nextField = qwField;
+        nextDir = "desc";
+      }
+
+      setSortField(nextField);
+      setSortDir(nextDir);
+      saveLogSort(nextField ? { field: nextField, dir: nextDir } : null);
+    },
+    [sortField, sortDir],
+  );
+
+  // Re-fetch when sort changes (skip initial mount — fetchData is triggered by FilterBar)
+  const sortMountRef = useRef(true);
+  useEffect(() => {
+    if (sortMountRef.current) {
+      sortMountRef.current = false;
+      return;
+    }
+    fetchData();
+  }, [sortField, sortDir]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tracesLink = useMemo(() => {
     const p = new URLSearchParams();
@@ -237,13 +302,30 @@ export function LogsView() {
                     const label = pseudo?.label ?? colId;
                     const align = colId === "_trace" ? "text-center" : "text-left";
                     const w = resolvedWidths[colId];
+                    const qwSortField = pseudo ? PSEUDO_SORT_FIELDS[colId] : undefined;
+                    const sortable = qwSortField !== undefined;
+                    const isActiveSort = sortable && sortField === qwSortField;
                     return (
                       <th
                         key={colId}
                         className={`relative px-4 py-2 font-medium ${align} overflow-hidden text-ellipsis whitespace-nowrap`}
                         style={{ width: w, maxWidth: w }}
                       >
-                        {label}
+                        {sortable ? (
+                          <button
+                            onClick={() => handleSort(colId)}
+                            className="inline-flex items-center gap-1 hover:text-foreground"
+                          >
+                            {label}
+                            {isActiveSort ? (
+                              sortDir === "desc" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />
+                            ) : (
+                              <ArrowUpDown className="h-3 w-3 opacity-0 group-hover/th:opacity-100" />
+                            )}
+                          </button>
+                        ) : (
+                          label
+                        )}
                         <ResizeHandle
                           width={w}
                           onResize={(newW) =>

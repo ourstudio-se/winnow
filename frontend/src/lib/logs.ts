@@ -25,6 +25,41 @@ export function severityColor(severity: string): string {
   return "text-muted-foreground";
 }
 
+// --- Sort ---
+
+export type SortDirection = "asc" | "desc";
+
+/** Map pseudo-column IDs to the Quickwit field used for sorting. undefined = not sortable. */
+export const PSEUDO_SORT_FIELDS: Record<string, string | undefined> = {
+  _timestamp: "timestamp_nanos",
+  _severity: "severity_number",
+  _service: "service_name",
+  _message: undefined,
+  _trace: "trace_id",
+};
+
+const SORT_STORAGE_KEY = "winnow-log-sort";
+
+export function loadLogSort(): { field: string; dir: SortDirection } | null {
+  try {
+    const stored = localStorage.getItem(SORT_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed.field === "string" && (parsed.dir === "asc" || parsed.dir === "desc"))
+        return parsed;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+export function saveLogSort(sort: { field: string; dir: SortDirection } | null) {
+  if (sort) {
+    localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort));
+  } else {
+    localStorage.removeItem(SORT_STORAGE_KEY);
+  }
+}
+
 // --- Column definitions ---
 
 export interface LogColumnDef {
