@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { X, Plus, Search, Loader2 } from "lucide-react";
+import { X, Plus, Search, Loader2, Calendar, ChevronDown } from "lucide-react";
 import {
   getIndexMetadata,
   search as apiSearch,
@@ -41,28 +41,89 @@ interface DiscoveredField {
   kind: "text" | "bool";
 }
 
-interface TimePreset {
+type TimeSelection =
+  | { type: "relative"; key: string; label: string; seconds: number }
+  | { type: "absolute"; from: Date; to: Date }
+  | { type: "all" };
+
+interface QuickPreset {
+  key: string;
   label: string;
-  seconds: number | null;
+  seconds: number;
 }
 
-const TIME_PRESETS: TimePreset[] = [
-  { label: "Last 15 minutes", seconds: 900 },
-  { label: "Last 1 hour", seconds: 3600 },
-  { label: "Last 6 hours", seconds: 21600 },
-  { label: "Last 24 hours", seconds: 86400 },
-  { label: "Last 7 days", seconds: 604800 },
-  { label: "All time", seconds: null },
+const QUICK_PRESETS: QuickPreset[] = [
+  { key: "15m", label: "Last 15 minutes", seconds: 900 },
+  { key: "1h", label: "Last 1 hour", seconds: 3600 },
+  { key: "4h", label: "Last 4 hours", seconds: 14400 },
+  { key: "12h", label: "Last 12 hours", seconds: 43200 },
+  { key: "24h", label: "Last 24 hours", seconds: 86400 },
+  { key: "2d", label: "Last 2 days", seconds: 172800 },
+  { key: "7d", label: "Last 7 days", seconds: 604800 },
+  { key: "30d", label: "Last 30 days", seconds: 2592000 },
 ];
 
-const DEFAULT_PRESET_INDEX = 1; // "Last 1 hour"
-
-const TIME_PRESET_KEYS = ["15m", "1h", "6h", "24h", "7d", "all"] as const;
+const DEFAULT_PRESET = QUICK_PRESETS[1]; // "Last 1 hour"
 const STORAGE_KEY = "winnow-time-preset";
 
-function presetKeyToIndex(key: string): number {
-  const i = (TIME_PRESET_KEYS as readonly string[]).indexOf(key);
-  return i >= 0 ? i : DEFAULT_PRESET_INDEX;
+function parseTimeParam(param: string | null): TimeSelection {
+  if (!param) return { type: "relative", ...DEFAULT_PRESET };
+  if (param === "all") return { type: "all" };
+  if (param.startsWith("abs:")) {
+    const parts = param.slice(4).split(",");
+    if (parts.length === 2) {
+      const from = new Date(parts[0]);
+      const to = new Date(parts[1]);
+      if (!isNaN(from.getTime()) && !isNaN(to.getTime())) {
+        return { type: "absolute", from, to };
+      }
+    }
+    return { type: "relative", ...DEFAULT_PRESET };
+  }
+  const preset = QUICK_PRESETS.find((p) => p.key === param);
+  if (preset) return { type: "relative", ...preset };
+  // Backward compat: old keys like "6h" that no longer exist
+  return { type: "relative", ...DEFAULT_PRESET };
+}
+
+function serializeTimeParam(sel: TimeSelection): string {
+  if (sel.type === "all") return "all";
+  if (sel.type === "absolute") {
+    const fmt = (d: Date) => {
+      // Format as local ISO without seconds: YYYY-MM-DDTHH:mm
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, "0");
+      const da = String(d.getDate()).padStart(2, "0");
+      const h = String(d.getHours()).padStart(2, "0");
+      const mi = String(d.getMinutes()).padStart(2, "0");
+      return `${y}-${mo}-${da}T${h}:${mi}`;
+    };
+    return `abs:${fmt(sel.from)},${fmt(sel.to)}`;
+  }
+  return sel.key;
+}
+
+function timeSelectionLabel(sel: TimeSelection): string {
+  if (sel.type === "all") return "All time";
+  if (sel.type === "relative") return sel.label;
+  const fmt = (d: Date) =>
+    d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  return `${fmt(sel.from)} → ${fmt(sel.to)}`;
+}
+
+/** Convert a Date to a string suitable for datetime-local inputs (YYYY-MM-DDTHH:mm). */
+function toDatetimeLocal(d: Date): string {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const da = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${mo}-${da}T${h}:${mi}`;
 }
 
 // Fields not useful as user-facing filters
@@ -212,13 +273,16 @@ function FilterChip({
 
 export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabels, trailing, timestampField = "span_start_timestamp_nanos" }: FilterBarProps) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [timePresetIndex, setTimePresetIndex] = useState(() => {
+  const [timeSelection, setTimeSelection] = useState<TimeSelection>(() => {
     const fromUrl = searchParams.get("time");
-    if (fromUrl) return presetKeyToIndex(fromUrl);
+    if (fromUrl) return parseTimeParam(fromUrl);
     const fromStorage = localStorage.getItem(STORAGE_KEY);
-    if (fromStorage) return presetKeyToIndex(fromStorage);
-    return DEFAULT_PRESET_INDEX;
+    if (fromStorage) return parseTimeParam(fromStorage);
+    return { type: "relative", ...DEFAULT_PRESET };
   });
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const [absFrom, setAbsFrom] = useState("");
+  const [absTo, setAbsTo] = useState("");
   const [discoveredFields, setDiscoveredFields] = useState<DiscoveredField[]>(
     [],
   );
@@ -247,10 +311,10 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
 
   // Sync URL param on mount if missing (populate from resolved value)
   useEffect(() => {
-    const key = TIME_PRESET_KEYS[timePresetIndex];
-    if (searchParams.get("time") !== key) {
+    const serialized = serializeTimeParam(timeSelection);
+    if (searchParams.get("time") !== serialized) {
       const next = new URLSearchParams(searchParams);
-      next.set("time", key);
+      next.set("time", serialized);
       setSearchParams(next, { replace: true });
     }
     // Only on mount
@@ -270,18 +334,20 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     };
   }, [index, baseQuery, timestampField]);
 
-  // Build FilterState from current active filters + time preset.
+  // Build FilterState from current active filters + time selection.
   const buildFilterState = useCallback(
-    (filters: ActiveFilter[], presetIdx: number): FilterState => {
-      const preset = TIME_PRESETS[presetIdx];
+    (filters: ActiveFilter[], sel: TimeSelection): FilterState => {
       const parts: string[] = [];
-      if (preset.seconds != null) {
+      if (sel.type === "relative") {
         const nowNanos = BigInt(Date.now()) * 1_000_000n;
-        const startNanos = nowNanos - BigInt(preset.seconds) * 1_000_000_000n;
-        parts.push(
-          `${timestampField}:[${startNanos} TO ${nowNanos}]`,
-        );
+        const startNanos = nowNanos - BigInt(sel.seconds) * 1_000_000_000n;
+        parts.push(`${timestampField}:[${startNanos} TO ${nowNanos}]`);
+      } else if (sel.type === "absolute") {
+        const fromNanos = BigInt(sel.from.getTime()) * 1_000_000n;
+        const toNanos = BigInt(sel.to.getTime()) * 1_000_000n;
+        parts.push(`${timestampField}:[${fromNanos} TO ${toNanos}]`);
       }
+      // type "all" — no time constraint
       const filterQuery = buildQuery(filters);
       if (filterQuery !== "*") parts.push(filterQuery);
       return {
@@ -294,12 +360,12 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
   // Fire onFilterChange on mount and whenever filters or time change
   const prevFilterKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = searchParams.getAll("f").join("\0") + "\0" + timePresetIndex;
+    const key = searchParams.getAll("f").join("\0") + "\0" + serializeTimeParam(timeSelection);
     if (key !== prevFilterKeyRef.current) {
       prevFilterKeyRef.current = key;
-      onFilterChange(buildFilterState(activeFilters, timePresetIndex));
+      onFilterChange(buildFilterState(activeFilters, timeSelection));
     }
-  }, [activeFilters, timePresetIndex, buildFilterState, onFilterChange, searchParams]);
+  }, [activeFilters, timeSelection, buildFilterState, onFilterChange, searchParams]);
 
   function addFilter(field: DiscoveredField, value: string) {
     const trimmed = value.trim();
@@ -329,14 +395,33 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     setSearchParams(next, { replace: true });
   }
 
-  function handleTimePresetChange(newIndex: number) {
-    setTimePresetIndex(newIndex);
-    const key = TIME_PRESET_KEYS[newIndex];
-    localStorage.setItem(STORAGE_KEY, key);
+  function handleTimeChange(sel: TimeSelection) {
+    setTimeSelection(sel);
+    const serialized = serializeTimeParam(sel);
+    localStorage.setItem(STORAGE_KEY, serialized);
     const next = new URLSearchParams(searchParams);
-    next.set("time", key);
+    next.set("time", serialized);
     setSearchParams(next, { replace: true });
-    onFilterChange(buildFilterState(activeFilters, newIndex));
+    onFilterChange(buildFilterState(activeFilters, sel));
+  }
+
+  /** Pre-fill absolute inputs from the current selection and open the picker. */
+  function handleTimePickerOpen(open: boolean) {
+    if (open) {
+      if (timeSelection.type === "absolute") {
+        setAbsFrom(toDatetimeLocal(timeSelection.from));
+        setAbsTo(toDatetimeLocal(timeSelection.to));
+      } else if (timeSelection.type === "relative") {
+        const now = new Date();
+        const from = new Date(now.getTime() - timeSelection.seconds * 1000);
+        setAbsFrom(toDatetimeLocal(from));
+        setAbsTo(toDatetimeLocal(now));
+      } else {
+        setAbsFrom("");
+        setAbsTo("");
+      }
+    }
+    setTimePickerOpen(open);
   }
 
   // Reset popover state when it closes
@@ -398,18 +483,99 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
-      {/* Time preset dropdown */}
-      <select
-        value={timePresetIndex}
-        onChange={(e) => handleTimePresetChange(Number(e.target.value))}
-        className="h-7 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
-      >
-        {TIME_PRESETS.map((preset, i) => (
-          <option key={i} value={i}>
-            {preset.label}
-          </option>
-        ))}
-      </select>
+      {/* Time picker */}
+      <Popover open={timePickerOpen} onOpenChange={handleTimePickerOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            size="xs"
+            className="gap-1.5 text-foreground"
+          >
+            <Calendar className="h-3 w-3 text-muted-foreground" />
+            <span className="max-w-48 truncate">{timeSelectionLabel(timeSelection)}</span>
+            <ChevronDown className="h-3 w-3 text-muted-foreground" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-auto p-0" sideOffset={8}>
+          <div className="flex">
+            {/* Left: quick presets */}
+            <div className="flex flex-col border-r border-border py-1" style={{ minWidth: "10rem" }}>
+              <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Quick select
+              </div>
+              {QUICK_PRESETS.map((p) => (
+                <button
+                  key={p.key}
+                  onClick={() => {
+                    handleTimeChange({ type: "relative", ...p });
+                    setTimePickerOpen(false);
+                  }}
+                  className={`px-3 py-1.5 text-left text-xs hover:bg-muted ${
+                    timeSelection.type === "relative" && timeSelection.key === p.key
+                      ? "bg-muted font-medium text-foreground"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  handleTimeChange({ type: "all" });
+                  setTimePickerOpen(false);
+                }}
+                className={`px-3 py-1.5 text-left text-xs hover:bg-muted ${
+                  timeSelection.type === "all"
+                    ? "bg-muted font-medium text-foreground"
+                    : "text-muted-foreground"
+                }`}
+              >
+                All time
+              </button>
+            </div>
+
+            {/* Right: absolute time range */}
+            <div className="flex flex-col gap-3 p-3" style={{ minWidth: "14rem" }}>
+              <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Absolute time range
+              </div>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">From</span>
+                <input
+                  type="datetime-local"
+                  value={absFrom}
+                  onChange={(e) => setAbsFrom(e.target.value)}
+                  className="h-8 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">To</span>
+                <input
+                  type="datetime-local"
+                  value={absTo}
+                  onChange={(e) => setAbsTo(e.target.value)}
+                  className="h-8 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                />
+              </label>
+              <Button
+                size="sm"
+                className="w-full"
+                disabled={!absFrom || !absTo}
+                onClick={() => {
+                  const from = new Date(absFrom);
+                  const to = new Date(absTo);
+                  if (!isNaN(from.getTime()) && !isNaN(to.getTime()) && from < to) {
+                    handleTimeChange({ type: "absolute", from, to });
+                    setTimePickerOpen(false);
+                  }
+                }}
+              >
+                Apply
+              </Button>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
 
       {/* Active filter chips */}
       {activeFilters.map((f) => (

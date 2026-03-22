@@ -104,6 +104,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] **Configurable log columns** — sidebar column selector with drag-and-drop reordering (`@dnd-kit`), pseudo columns (Timestamp, Severity, Service, Message, Trace) with pretty renderers, data field discovery from fetched documents, localStorage persistence, `SidebarPanelContext` for view→sidebar injection
 - [x] **Load more (logs + traces)** — timestamp-cursor pagination ("load more" button at bottom of list); narrows within existing time range so it can never exceed time picker bounds; logs cursor on `timestamp_nanos`, traces cursor on `span_start_timestamp_nanos`; accumulated spans re-grouped into traces on each load
 - [x] **Resizable table columns** — drag-to-resize handles on log and trace table headers, `table-layout: fixed`, pixel widths persisted in localStorage, horizontal scroll when columns exceed viewport; shared `ResizeHandle` component
+- [x] **Elasticsearch-style time picker** — Popover-based picker with quick presets (15m–30d + All time) on left panel and absolute From/To datetime-local inputs on right panel; supports relative, absolute, and "all time" selections; backward-compatible URL encoding (`?time=1h`, `?time=abs:...`, `?time=all`); persisted via URL + localStorage
 - [ ] Verify: can see service map with real edges, click through to traces and logs
 
 ## Index Metadata Endpoint
