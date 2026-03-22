@@ -408,7 +408,7 @@ function LogCell({
         <td className="px-4 py-2 text-center">
           {log.trace_id ? (
             <Link
-              to={`/traces/${log.trace_id}`}
+              to={`/traces/${log.trace_id}${log.span_id ? `?span=${log.span_id}` : ""}`}
               onClick={(e) => e.stopPropagation()}
               className="inline-flex text-muted-foreground hover:text-foreground"
             >

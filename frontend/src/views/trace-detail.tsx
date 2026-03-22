@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams, Link } from "react-router";
+import { useNavigate, useParams, useSearchParams, Link } from "react-router";
 import { ArrowLeft, AlertCircle, ChevronDown, ChevronRight, Map } from "lucide-react";
 import { search } from "@/lib/api";
 import {
@@ -297,6 +297,7 @@ function SpanDetailPanel({ span }: { span: SpanDocument }) {
 
 export function TraceDetailView() {
   const { traceId } = useParams<{ traceId: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   // Go back to wherever the user came from (preserves filters/params)
   const goBack = useCallback(() => navigate(-1), [navigate]);
@@ -304,7 +305,9 @@ export function TraceDetailView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [numHits, setNumHits] = useState(0);
-  const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
+  const [selectedSpanId, setSelectedSpanId] = useState<string | null>(
+    () => searchParams.get("span"),
+  );
 
   const fetchTrace = useCallback(async () => {
     if (!traceId) return;
