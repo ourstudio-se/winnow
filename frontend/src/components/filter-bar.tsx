@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { X, Plus, Search, Loader2, Calendar, ChevronDown } from "lucide-react";
+import { X, Plus, Search, Loader2, Calendar, ChevronDown, Code, Play } from "lucide-react";
 import {
   getIndexMetadata,
   search as apiSearch,
@@ -295,6 +295,13 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
   const [valuesLoading, setValuesLoading] = useState(false);
   const valueInputRef = useRef<HTMLInputElement>(null);
 
+  // Raw query mode — driven by URL `q` param
+  const rawQuery = searchParams.get("q");
+  const isRawMode = rawQuery !== null;
+  const [rawInput, setRawInput] = useState(rawQuery ?? "");
+  // Sync local input when URL q param changes externally (navigation)
+  useEffect(() => { setRawInput(rawQuery ?? ""); }, [rawQuery]);
+
   // Derive active filters from URL params
   const activeFilters = useMemo(() => {
     return searchParams.getAll("f").map((raw) => {
@@ -333,8 +340,9 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
   }, [index, baseQuery, timestampField]);
 
   // Build FilterState from current active filters + time selection.
+  // rawQ: null = chip mode, "" = raw mode with empty input, non-empty = raw query string.
   const buildFilterState = useCallback(
-    (filters: ActiveFilter[], sel: TimeSelection): FilterState => {
+    (filters: ActiveFilter[], sel: TimeSelection, rawQ: string | null): FilterState => {
       const parts: string[] = [];
       if (sel.type === "relative") {
         const nowNanos = BigInt(Date.now()) * 1_000_000n;
@@ -346,8 +354,14 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
         parts.push(`${timestampField}:[${fromNanos} TO ${toNanos}]`);
       }
       // type "all" — no time constraint
-      const filterQuery = buildQuery(filters);
-      if (filterQuery !== "*") parts.push(filterQuery);
+      if (rawQ !== null) {
+        // Raw mode: wrap user input in parens so OR doesn't break precedence
+        if (rawQ) parts.push(`(${rawQ})`);
+        // Empty raw query = no user filter (equivalent to *)
+      } else {
+        const filterQuery = buildQuery(filters);
+        if (filterQuery !== "*") parts.push(filterQuery);
+      }
       return {
         query: parts.length > 0 ? parts.join(" AND ") : "*",
       };
@@ -358,12 +372,12 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
   // Fire onFilterChange on mount and whenever filters or time change
   const prevFilterKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = searchParams.getAll("f").join("\0") + "\0" + serializeTimeParam(timeSelection);
+    const key = searchParams.getAll("f").join("\0") + "\0" + serializeTimeParam(timeSelection) + "\0" + (searchParams.get("q") ?? "");
     if (key !== prevFilterKeyRef.current) {
       prevFilterKeyRef.current = key;
-      onFilterChange(buildFilterState(activeFilters, timeSelection));
+      onFilterChange(buildFilterState(activeFilters, timeSelection, rawQuery));
     }
-  }, [activeFilters, timeSelection, buildFilterState, onFilterChange, searchParams]);
+  }, [activeFilters, timeSelection, buildFilterState, onFilterChange, searchParams, rawQuery]);
 
   function addFilter(field: DiscoveredField, value: string) {
     const trimmed = value.trim();
@@ -393,6 +407,23 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     setSearchParams(next, { replace: true });
   }
 
+  function toggleRawMode() {
+    const next = new URLSearchParams(searchParams);
+    if (isRawMode) {
+      next.delete("q");
+    } else {
+      const chipQuery = buildQuery(activeFilters);
+      next.set("q", chipQuery === "*" ? "" : chipQuery);
+    }
+    setSearchParams(next, { replace: true });
+  }
+
+  function submitRawQuery() {
+    const next = new URLSearchParams(searchParams);
+    next.set("q", rawInput);
+    setSearchParams(next, { replace: true });
+  }
+
   function handleTimeChange(sel: TimeSelection) {
     setTimeSelection(sel);
     const serialized = serializeTimeParam(sel);
@@ -400,7 +431,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     const next = new URLSearchParams(searchParams);
     next.set("time", serialized);
     setSearchParams(next, { replace: true });
-    onFilterChange(buildFilterState(activeFilters, sel));
+    onFilterChange(buildFilterState(activeFilters, sel, rawQuery));
   }
 
   /** Pre-fill absolute inputs from the current selection and open the picker. */
@@ -597,150 +628,186 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
         </PopoverContent>
       </Popover>
 
-      {/* Active filter chips */}
-      {activeFilters.map((f) => (
-        <FilterChip
-          key={f.field}
-          filter={f}
-          resolvedLabel={resolvedLabels?.[f.field]}
-          onRemove={() => removeFilter(f.field)}
-        />
-      ))}
+      {/* Chip mode: active filter chips + add filter popover */}
+      {!isRawMode && (
+        <>
+          {activeFilters.map((f) => (
+            <FilterChip
+              key={f.field}
+              filter={f}
+              resolvedLabel={resolvedLabels?.[f.field]}
+              onRemove={() => removeFilter(f.field)}
+            />
+          ))}
 
-      {/* Add filter popover */}
-      <Popover open={popoverOpen} onOpenChange={handlePopoverOpenChange}>
-        <PopoverTrigger asChild>
-          <Button variant="outline" size="xs" className="gap-1 text-muted-foreground">
-            <Plus className="h-3 w-3" />
-            Add filter
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-64 p-0">
-          {popoverStep === "field" ? (
-            <div className="flex flex-col">
-              {/* Search input */}
-              <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
-                <Search className="h-3.5 w-3.5 text-muted-foreground" />
-                <input
-                  type="text"
-                  placeholder="Search fields..."
-                  value={fieldSearch}
-                  onChange={(e) => setFieldSearch(e.target.value)}
-                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                  autoFocus
-                />
-              </div>
-              {/* Field list */}
-              <div className="max-h-64 overflow-y-auto py-1">
-                {filteredFields.length === 0 ? (
-                  <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-                    No fields found
+          <Popover open={popoverOpen} onOpenChange={handlePopoverOpenChange}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="xs" className="gap-1 text-muted-foreground">
+                <Plus className="h-3 w-3" />
+                Add filter
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-64 p-0">
+              {popoverStep === "field" ? (
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+                    <Search className="h-3.5 w-3.5 text-muted-foreground" />
+                    <input
+                      type="text"
+                      placeholder="Search fields..."
+                      value={fieldSearch}
+                      onChange={(e) => setFieldSearch(e.target.value)}
+                      className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                      autoFocus
+                    />
                   </div>
-                ) : (
-                  filteredFields.map((f) => (
-                    <button
-                      key={f.field}
-                      onClick={() => handleFieldSelect(f)}
-                      className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-muted"
-                    >
-                      <span className="truncate">{f.field}</span>
-                      <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
-                        {f.kind}
-                      </span>
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-          ) : selectedField?.kind === "bool" ? (
-            <div className="flex flex-col gap-2.5 p-2.5">
-              <div className="text-xs font-medium text-muted-foreground">
-                {selectedField?.field}
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="xs"
-                  className="flex-1"
-                  onClick={() => {
-                    if (selectedField) addFilter(selectedField, "true");
-                    setPopoverOpen(false);
-                  }}
-                >
-                  true
-                </Button>
-                <Button
-                  variant="outline"
-                  size="xs"
-                  className="flex-1"
-                  onClick={() => {
-                    if (selectedField) addFilter(selectedField, "false");
-                    setPopoverOpen(false);
-                  }}
-                >
-                  false
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col">
-              <div className="border-b border-border px-2.5 py-2 text-xs font-medium text-muted-foreground">
-                {selectedField?.field}
-              </div>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleValueSubmit();
-                }}
-                className="flex items-center gap-2 border-b border-border px-2.5 py-2"
-              >
-                <Search className="h-3.5 w-3.5 text-muted-foreground" />
-                <input
-                  ref={valueInputRef}
-                  type="text"
-                  placeholder="Type to filter..."
-                  value={valueInput}
-                  onChange={(e) => setValueInput(e.target.value)}
-                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                />
-                {valuesLoading && (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                )}
-              </form>
-              <div className="max-h-48 overflow-y-auto py-1">
-                {valuesLoading && suggestedValues.length === 0 ? (
-                  <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-                    Loading values...
+                  <div className="max-h-64 overflow-y-auto py-1">
+                    {filteredFields.length === 0 ? (
+                      <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                        No fields found
+                      </div>
+                    ) : (
+                      filteredFields.map((f) => (
+                        <button
+                          key={f.field}
+                          onClick={() => handleFieldSelect(f)}
+                          className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-muted"
+                        >
+                          <span className="truncate">{f.field}</span>
+                          <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
+                            {f.kind}
+                          </span>
+                        </button>
+                      ))
+                    )}
                   </div>
-                ) : filteredValues.length > 0 ? (
-                  filteredValues.map((v) => (
-                    <button
-                      key={v}
+                </div>
+              ) : selectedField?.kind === "bool" ? (
+                <div className="flex flex-col gap-2.5 p-2.5">
+                  <div className="text-xs font-medium text-muted-foreground">
+                    {selectedField?.field}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      className="flex-1"
                       onClick={() => {
-                        if (selectedField) addFilter(selectedField, v);
+                        if (selectedField) addFilter(selectedField, "true");
                         setPopoverOpen(false);
                       }}
-                      className="flex w-full items-center px-3 py-1.5 text-left text-xs hover:bg-muted"
                     >
-                      <span className="truncate">{v}</span>
-                    </button>
-                  ))
-                ) : !valuesLoading && valueInput ? (
-                  <div className="px-3 py-2 text-center text-xs text-muted-foreground">
-                    No matches — press Enter to use "{valueInput}"
+                      true
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      className="flex-1"
+                      onClick={() => {
+                        if (selectedField) addFilter(selectedField, "false");
+                        setPopoverOpen(false);
+                      }}
+                    >
+                      false
+                    </Button>
                   </div>
-                ) : !valuesLoading ? (
-                  <div className="px-3 py-2 text-center text-xs text-muted-foreground">
-                    Type a value and press Enter
+                </div>
+              ) : (
+                <div className="flex flex-col">
+                  <div className="border-b border-border px-2.5 py-2 text-xs font-medium text-muted-foreground">
+                    {selectedField?.field}
                   </div>
-                ) : null}
-              </div>
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleValueSubmit();
+                    }}
+                    className="flex items-center gap-2 border-b border-border px-2.5 py-2"
+                  >
+                    <Search className="h-3.5 w-3.5 text-muted-foreground" />
+                    <input
+                      ref={valueInputRef}
+                      type="text"
+                      placeholder="Type to filter..."
+                      value={valueInput}
+                      onChange={(e) => setValueInput(e.target.value)}
+                      className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                    />
+                    {valuesLoading && (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                    )}
+                  </form>
+                  <div className="max-h-48 overflow-y-auto py-1">
+                    {valuesLoading && suggestedValues.length === 0 ? (
+                      <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                        Loading values...
+                      </div>
+                    ) : filteredValues.length > 0 ? (
+                      filteredValues.map((v) => (
+                        <button
+                          key={v}
+                          onClick={() => {
+                            if (selectedField) addFilter(selectedField, v);
+                            setPopoverOpen(false);
+                          }}
+                          className="flex w-full items-center px-3 py-1.5 text-left text-xs hover:bg-muted"
+                        >
+                          <span className="truncate">{v}</span>
+                        </button>
+                      ))
+                    ) : !valuesLoading && valueInput ? (
+                      <div className="px-3 py-2 text-center text-xs text-muted-foreground">
+                        No matches — press Enter to use "{valueInput}"
+                      </div>
+                    ) : !valuesLoading ? (
+                      <div className="px-3 py-2 text-center text-xs text-muted-foreground">
+                        Type a value and press Enter
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+        </>
+      )}
 
-      {trailing && <div className="ml-auto">{trailing}</div>}
+      {/* Raw query mode: text input + Run button */}
+      {isRawMode && (
+        <>
+          <input
+            type="text"
+            value={rawInput}
+            onChange={(e) => setRawInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                submitRawQuery();
+              }
+            }}
+            placeholder='service_name:"api" AND severity_number:>8'
+            className="h-7 flex-1 rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+          />
+          <Button variant="default" size="xs" className="gap-1" onClick={submitRawQuery}>
+            <Play className="h-3 w-3" />
+            Run
+          </Button>
+        </>
+      )}
+
+      {/* Trailing content + raw mode toggle */}
+      <div className="ml-auto flex items-center gap-2">
+        {trailing}
+        <Button
+          variant="ghost"
+          size="xs"
+          className={`gap-1 text-muted-foreground hover:text-foreground ${isRawMode ? "bg-muted text-foreground" : ""}`}
+          onClick={toggleRawMode}
+          title={isRawMode ? "Switch to filter chips" : "Switch to raw query"}
+        >
+          <Code className="h-3 w-3" />
+        </Button>
+      </div>
     </div>
   );
 }

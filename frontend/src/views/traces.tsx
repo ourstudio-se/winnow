@@ -143,6 +143,8 @@ export function TracesView() {
     for (const f of searchParams.getAll("f")) {
       p.append("f", f);
     }
+    const q = searchParams.get("q");
+    if (q != null) p.set("q", q);
     const qs = p.toString();
     return (
       <Link
