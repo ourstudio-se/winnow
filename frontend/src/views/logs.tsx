@@ -483,7 +483,21 @@ function LogDetail({
               </Link>
             </span>
           )}
-          {log.span_id && <span>span_id: {log.span_id}</span>}
+          {log.span_id && (
+            <span>
+              span_id:{" "}
+              {log.trace_id ? (
+                <Link
+                  to={`/traces/${log.trace_id}?span=${log.span_id}`}
+                  className="text-foreground underline decoration-muted-foreground/30 hover:decoration-foreground"
+                >
+                  {log.span_id}
+                </Link>
+              ) : (
+                log.span_id
+              )}
+            </span>
+          )}
         </div>
       )}
     </div>

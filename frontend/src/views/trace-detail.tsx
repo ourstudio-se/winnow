@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams, Link } from "react-router";
-import { ArrowLeft, AlertCircle, ChevronDown, ChevronRight, Map } from "lucide-react";
+import { ArrowLeft, AlertCircle, ChevronDown, ChevronRight, Map, ExternalLink } from "lucide-react";
 import { search } from "@/lib/api";
 import {
   type SpanDocument,
@@ -12,6 +12,7 @@ import {
   formatTimestampShort,
   spanKindLabel,
 } from "@/lib/traces";
+import { type LogDocument, extractBody, severityColor } from "@/lib/logs";
 
 // --- Time ruler ---
 
@@ -218,6 +219,82 @@ function SpanEvents({
   );
 }
 
+function SpanLogs({ spanId }: { spanId: string }) {
+  const [open, setOpen] = useState(true);
+  const [logs, setLogs] = useState<LogDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    search<LogDocument>("otel-logs-v0_9", {
+      query: `span_id:${spanId}`,
+      max_hits: 5,
+      sort_by: "-timestamp_nanos",
+    })
+      .then((res) => {
+        if (!cancelled) setLogs(res.hits);
+      })
+      .catch(() => {
+        if (!cancelled) setLogs([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [spanId]);
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-1 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+      >
+        {open ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+        Logs
+      </button>
+      {open && (
+        <div className="pl-4">
+          {loading ? (
+            <p className="py-1 text-xs text-muted-foreground">Loading...</p>
+          ) : logs.length === 0 ? (
+            <p className="py-1 text-xs text-muted-foreground">No logs for this span</p>
+          ) : (
+            <div className="space-y-1">
+              {logs.map((log, i) => (
+                <div key={i} className="flex gap-2 text-xs">
+                  <span className="shrink-0 whitespace-nowrap text-muted-foreground">
+                    {formatTimestampShort(log.timestamp_nanos)}
+                  </span>
+                  <span className={`shrink-0 font-medium ${severityColor(log.severity_text)}`}>
+                    {log.severity_text}
+                  </span>
+                  <span className="truncate text-foreground">
+                    {extractBody(log.body)}
+                  </span>
+                </div>
+              ))}
+              <Link
+                to={`/logs?f=${encodeURIComponent(`span_id:${spanId}`)}`}
+                className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground underline decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
+              >
+                View all logs for this span
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SpanDetailPanel({ span }: { span: SpanDocument }) {
   const hasError = span.span_status?.code === 2;
 
@@ -287,6 +364,7 @@ function SpanDetailPanel({ span }: { span: SpanDocument }) {
             attrs={span.resource_attributes}
           />
           <SpanEvents events={span.events} />
+          <SpanLogs spanId={span.span_id} />
         </div>
       </div>
     </div>
