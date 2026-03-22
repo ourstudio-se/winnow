@@ -13,10 +13,14 @@ import {
   getFieldValue,
   loadColumns,
   saveColumns,
+  loadColumnWidths,
+  saveColumnWidths,
+  getColumnWidth,
   PSEUDO_COLUMNS,
 } from "@/lib/logs";
 import { useSidebarPanel } from "@/lib/sidebar-context";
 import { ColumnSelector } from "@/components/column-selector";
+import { ResizeHandle } from "@/components/resize-handle";
 
 const PAGE_SIZE = 200;
 
@@ -33,6 +37,43 @@ export function LogsView() {
   // Column state
   const [columns, setColumns] = useState<string[]>(loadColumns);
   const [discoveredFields, setDiscoveredFields] = useState<LogColumnDef[]>([]);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(loadColumnWidths);
+
+  // Measure scroll container so the table always fills at least 100%
+  const [containerWidth, setContainerWidth] = useState(0);
+  const roRef = useRef<ResizeObserver | null>(null);
+  const scrollRef = useCallback((el: HTMLDivElement | null) => {
+    if (roRef.current) {
+      roRef.current.disconnect();
+      roRef.current = null;
+    }
+    if (el) {
+      const ro = new ResizeObserver(([entry]) =>
+        setContainerWidth(entry.contentRect.width),
+      );
+      ro.observe(el);
+      roRef.current = ro;
+    }
+  }, []);
+
+  // Compute exact pixel widths — extra space goes to _message (or last col)
+  const { resolvedWidths, tableWidth } = useMemo(() => {
+    const widths: Record<string, number> = {};
+    let sum = 0;
+    for (const id of columns) {
+      widths[id] = getColumnWidth(columnWidths, id);
+      sum += widths[id];
+    }
+    const tw = Math.max(sum, containerWidth);
+    const slack = tw - sum;
+    if (slack > 0 && columns.length > 0) {
+      const flexCol = columns.includes("_message")
+        ? "_message"
+        : columns[columns.length - 1];
+      widths[flexCol] += slack;
+    }
+    return { resolvedWidths: widths, tableWidth: tw };
+  }, [columns, columnWidths, containerWidth]);
 
   // Persist columns to localStorage
   const handleColumnsChange = useCallback((newColumns: string[]) => {
@@ -184,17 +225,38 @@ export function LogsView() {
               Showing {logs.length.toLocaleString()} of {numHits.toLocaleString()} matching logs
             </div>
           )}
-          <div className="flex-1 overflow-y-auto">
-            <table className="w-full text-sm">
+          <div ref={scrollRef} className="flex-1 overflow-auto">
+            <table
+              className="text-sm"
+              style={{ tableLayout: "fixed", width: tableWidth }}
+            >
               <thead className="sticky top-0 z-10 border-b border-border bg-card text-xs text-muted-foreground">
                 <tr>
                   {columns.map((colId) => {
                     const pseudo = pseudoMap.get(colId);
                     const label = pseudo?.label ?? colId;
                     const align = colId === "_trace" ? "text-center" : "text-left";
+                    const w = resolvedWidths[colId];
                     return (
-                      <th key={colId} className={`px-4 py-2 font-medium ${align}`}>
+                      <th
+                        key={colId}
+                        className={`relative px-4 py-2 font-medium ${align}`}
+                        style={{ width: w }}
+                      >
                         {label}
+                        <ResizeHandle
+                          width={w}
+                          onResize={(newW) =>
+                            setColumnWidths((prev) => ({ ...prev, [colId]: newW }))
+                          }
+                          onResizeEnd={(newW) => {
+                            setColumnWidths((prev) => {
+                              const next = { ...prev, [colId]: newW };
+                              saveColumnWidths(next);
+                              return next;
+                            });
+                          }}
+                        />
                       </th>
                     );
                   })}
@@ -337,7 +399,7 @@ function LogCell({
       );
     case "_message":
       return (
-        <td className="max-w-md truncate px-4 py-2 text-muted-foreground">
+        <td className="truncate px-4 py-2 text-muted-foreground">
           {bodyText}
         </td>
       );
@@ -358,7 +420,7 @@ function LogCell({
     default:
       // Data field
       return (
-        <td className="max-w-xs truncate px-4 py-2 font-mono text-xs text-muted-foreground">
+        <td className="truncate px-4 py-2 font-mono text-xs text-muted-foreground">
           {getFieldValue(log, colId)}
         </td>
       );

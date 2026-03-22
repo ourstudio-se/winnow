@@ -101,6 +101,9 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] **Unified FilterBar URL param filters** — URL param filters (service, peer, fingerprint, status, trace) merged into FilterBar via `urlFilters` prop; single filter row with reactive chips, removed duplicate filter state/clear functions/chip bar from views
 - [x] **All filters URL-persisted** — eliminated dual filter system (local state + URL pseudo-filters); every filter is now a `f=field:value` URL param, persisted across navigation; removed `UrlFilterConfig`, `urlFilters` prop, and all view-specific filter configs; all cross-view links use `f=` params
 - [x] **Logs view** — search bar + table listing logs, link to associated trace
+- [x] **Configurable log columns** — sidebar column selector with drag-and-drop reordering (`@dnd-kit`), pseudo columns (Timestamp, Severity, Service, Message, Trace) with pretty renderers, data field discovery from fetched documents, localStorage persistence, `SidebarPanelContext` for view→sidebar injection
+- [x] **Load more (logs + traces)** — timestamp-cursor pagination ("load more" button at bottom of list); narrows within existing time range so it can never exceed time picker bounds; logs cursor on `timestamp_nanos`, traces cursor on `span_start_timestamp_nanos`; accumulated spans re-grouped into traces on each load
+- [x] **Resizable table columns** — drag-to-resize handles on log and trace table headers, `table-layout: fixed`, pixel widths persisted in localStorage, horizontal scroll when columns exceed viewport; shared `ResizeHandle` component
 - [ ] Verify: can see service map with real edges, click through to traces and logs
 
 ## Index Metadata Endpoint

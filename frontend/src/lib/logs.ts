@@ -60,6 +60,42 @@ export function saveColumns(columns: string[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(columns));
 }
 
+// --- Column width persistence ---
+
+const WIDTH_STORAGE_KEY = "winnow-log-column-widths";
+
+const DEFAULT_WIDTHS: Record<string, number> = {
+  _timestamp: 180,
+  _severity: 90,
+  _service: 130,
+  _message: 400,
+  _trace: 60,
+};
+const DEFAULT_DATA_WIDTH = 150;
+
+export function loadColumnWidths(): Record<string, number> {
+  try {
+    const stored = localStorage.getItem(WIDTH_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+        return parsed;
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
+export function saveColumnWidths(widths: Record<string, number>) {
+  localStorage.setItem(WIDTH_STORAGE_KEY, JSON.stringify(widths));
+}
+
+export function getColumnWidth(
+  widths: Record<string, number>,
+  colId: string,
+): number {
+  return widths[colId] ?? DEFAULT_WIDTHS[colId] ?? DEFAULT_DATA_WIDTH;
+}
+
 // Fields already represented by pseudo columns — skip these when discovering data fields
 const PSEUDO_RAW_FIELDS = new Set([
   "timestamp_nanos",

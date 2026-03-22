@@ -181,6 +181,51 @@ export function formatTimestampShort(nanos: number): string {
   return new Date(nanos / 1_000_000).toLocaleTimeString();
 }
 
+// --- Trace list column widths ---
+
+const TRACE_WIDTH_STORAGE_KEY = "winnow-trace-column-widths";
+
+export const TRACE_COLUMNS = [
+  { id: "timestamp", label: "Timestamp", align: "text-left" },
+  { id: "service", label: "Service", align: "text-left" },
+  { id: "operation", label: "Operation", align: "text-left" },
+  { id: "duration", label: "Duration", align: "text-right" },
+  { id: "spans", label: "Spans", align: "text-right" },
+  { id: "status", label: "Status", align: "text-center" },
+] as const;
+
+const DEFAULT_TRACE_WIDTHS: Record<string, number> = {
+  timestamp: 180,
+  service: 150,
+  operation: 300,
+  duration: 100,
+  spans: 80,
+  status: 80,
+};
+
+export function getTraceColumnWidth(
+  widths: Record<string, number>,
+  colId: string,
+): number {
+  return widths[colId] ?? DEFAULT_TRACE_WIDTHS[colId] ?? 120;
+}
+
+export function loadTraceColumnWidths(): Record<string, number> {
+  try {
+    const stored = localStorage.getItem(TRACE_WIDTH_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+        return parsed;
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
+export function saveTraceColumnWidths(widths: Record<string, number>) {
+  localStorage.setItem(TRACE_WIDTH_STORAGE_KEY, JSON.stringify(widths));
+}
+
 export const SPAN_KIND_SHORT: Record<number, string> = {
   1: "INT",
   2: "SRV",

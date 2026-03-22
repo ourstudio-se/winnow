@@ -9,7 +9,12 @@ import {
   groupSpansByTrace,
   formatDuration,
   formatTimestamp,
+  TRACE_COLUMNS,
+  getTraceColumnWidth,
+  loadTraceColumnWidths,
+  saveTraceColumnWidths,
 } from "@/lib/traces";
+import { ResizeHandle } from "@/components/resize-handle";
 
 const PAGE_SIZE = 200;
 
@@ -24,6 +29,39 @@ export function TracesView() {
   const [error, setError] = useState<string | null>(null);
   const filterBarStateRef = useRef<FilterState | undefined>(undefined);
   const [resolvedLabels, setResolvedLabels] = useState<Record<string, string>>({});
+
+  // Column width state
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(loadTraceColumnWidths);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const roRef = useRef<ResizeObserver | null>(null);
+  const scrollRef = useCallback((el: HTMLDivElement | null) => {
+    if (roRef.current) {
+      roRef.current.disconnect();
+      roRef.current = null;
+    }
+    if (el) {
+      const ro = new ResizeObserver(([entry]) =>
+        setContainerWidth(entry.contentRect.width),
+      );
+      ro.observe(el);
+      roRef.current = ro;
+    }
+  }, []);
+
+  const { resolvedWidths, tableWidth } = useMemo(() => {
+    const widths: Record<string, number> = {};
+    let sum = 0;
+    for (const col of TRACE_COLUMNS) {
+      widths[col.id] = getTraceColumnWidth(columnWidths, col.id);
+      sum += widths[col.id];
+    }
+    const tw = Math.max(sum, containerWidth);
+    const slack = tw - sum;
+    if (slack > 0) {
+      widths.operation += slack;
+    }
+    return { resolvedWidths: widths, tableWidth: tw };
+  }, [columnWidths, containerWidth]);
 
   const getBaseQuery = useCallback(
     (filters?: FilterState) => {
@@ -157,16 +195,38 @@ export function TracesView() {
               Showing traces from {spans.length.toLocaleString()} of {numHits.toLocaleString()} matching spans
             </div>
           )}
-          <div className="flex-1 overflow-y-auto">
-            <table className="w-full text-sm">
+          <div ref={scrollRef} className="flex-1 overflow-auto">
+            <table
+              className="text-sm"
+              style={{ tableLayout: "fixed", width: tableWidth }}
+            >
               <thead className="sticky top-0 z-10 border-b border-border bg-card text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2 text-left font-medium">Timestamp</th>
-                  <th className="px-4 py-2 text-left font-medium">Service</th>
-                  <th className="px-4 py-2 text-left font-medium">Operation</th>
-                  <th className="px-4 py-2 text-right font-medium">Duration</th>
-                  <th className="px-4 py-2 text-right font-medium">Spans</th>
-                  <th className="px-4 py-2 text-center font-medium">Status</th>
+                  {TRACE_COLUMNS.map((col) => {
+                    const w = resolvedWidths[col.id];
+                    return (
+                      <th
+                        key={col.id}
+                        className={`relative px-4 py-2 font-medium ${col.align}`}
+                        style={{ width: w }}
+                      >
+                        {col.label}
+                        <ResizeHandle
+                          width={w}
+                          onResize={(newW) =>
+                            setColumnWidths((prev) => ({ ...prev, [col.id]: newW }))
+                          }
+                          onResizeEnd={(newW) => {
+                            setColumnWidths((prev) => {
+                              const next = { ...prev, [col.id]: newW };
+                              saveTraceColumnWidths(next);
+                              return next;
+                            });
+                          }}
+                        />
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -203,7 +263,7 @@ export function TracesView() {
                         </span>
                       )}
                     </td>
-                    <td className="max-w-xs truncate px-4 py-2 text-muted-foreground">
+                    <td className="truncate px-4 py-2 text-muted-foreground">
                       {trace.rootSpanName}
                     </td>
                     <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums">
