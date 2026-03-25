@@ -145,7 +145,7 @@ export function TimeHistogram({
 
   // Fetch histogram data
   useEffect(() => {
-    if (!timeRange || !query || containerWidth === 0) return;
+    if (!query || containerWidth === 0) return;
 
     const windowMs = timeRange.endMs - timeRange.startMs;
     if (windowMs <= 0) return;
@@ -187,14 +187,10 @@ export function TimeHistogram({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, index, timestampField, timeRange?.startMs, timeRange?.endMs, containerWidth]);
+  }, [query, index, timestampField, timeRange.startMs, timeRange.endMs, containerWidth]);
 
-  const windowMs = timeRange ? timeRange.endMs - timeRange.startMs : 0;
-  const hasWindow = timeRange !== null && windowMs > 0;
-
-  // For "all time" or invalid ranges, render a hidden container so the
-  // ResizeObserver stays attached and containerWidth is ready when we switch back.
-  if (!hasWindow) {
+  const windowMs = timeRange.endMs - timeRange.startMs;
+  if (windowMs <= 0) {
     return <div ref={containerCallbackRef} className="hidden" />;
   }
 
@@ -210,7 +206,7 @@ export function TimeHistogram({
   const ticks = generateTicks(timeRange.startMs, timeRange.endMs);
 
   function xFromMs(ms: number): number {
-    return ((ms - timeRange!.startMs) / windowMs) * containerWidth;
+    return ((ms - timeRange.startMs) / windowMs) * containerWidth;
   }
 
   function xFromNs(ns: number): number {
@@ -218,7 +214,7 @@ export function TimeHistogram({
   }
 
   function msFromX(x: number): number {
-    return timeRange!.startMs + (x / containerWidth) * windowMs;
+    return timeRange.startMs + (x / containerWidth) * windowMs;
   }
 
   const barWidthPx = (intervalMs / windowMs) * containerWidth;
@@ -234,7 +230,7 @@ export function TimeHistogram({
 
   function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
     const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect || !timeRange) return;
+    if (!rect) return;
     const x = e.clientX - rect.left;
 
     if (dragStartX !== null) {

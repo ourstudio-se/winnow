@@ -290,12 +290,11 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
         const nowNanos = BigInt(Date.now()) * 1_000_000n;
         const startNanos = nowNanos - BigInt(sel.seconds) * 1_000_000_000n;
         parts.push(`${timestampField}:[${startNanos} TO ${nowNanos}]`);
-      } else if (sel.type === "absolute") {
+      } else {
         const fromNanos = BigInt(sel.from.getTime()) * 1_000_000n;
         const toNanos = BigInt(sel.to.getTime()) * 1_000_000n;
         parts.push(`${timestampField}:[${fromNanos} TO ${toNanos}]`);
       }
-      // type "all" — no time constraint
       if (rawQ !== null) {
         // Raw mode: wrap user input in parens so OR doesn't break precedence
         if (rawQ) parts.push(`(${rawQ})`);
@@ -384,17 +383,12 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
         setAbsFromTime(fmtTime(timeSelection.from));
         setAbsToDate(fmtDate(timeSelection.to));
         setAbsToTime(fmtTime(timeSelection.to));
-      } else if (timeSelection.type === "relative") {
+      } else {
         const now = new Date();
         const from = new Date(now.getTime() - timeSelection.seconds * 1000);
         setAbsFromDate(fmtDate(from));
         setAbsFromTime("00:00");
         setAbsToDate(fmtDate(now));
-        setAbsToTime("00:00");
-      } else {
-        setAbsFromDate("");
-        setAbsFromTime("00:00");
-        setAbsToDate("");
         setAbsToTime("00:00");
       }
     }
@@ -505,19 +499,6 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
                   {p.label}
                 </button>
               ))}
-              <button
-                onClick={() => {
-                  handleTimeChange({ type: "all" });
-                  setTimePickerOpen(false);
-                }}
-                className={`px-3 py-1.5 text-left text-xs hover:bg-muted ${
-                  timeSelection.type === "all"
-                    ? "bg-muted font-medium text-foreground"
-                    : "text-muted-foreground"
-                }`}
-              >
-                All time
-              </button>
             </div>
 
             {/* Right: absolute time range */}

@@ -260,7 +260,7 @@ export function TracesView() {
                     <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
                       {formatTimestamp(trace.startTimestampNanos)}
                     </td>
-                    <td className="px-4 py-2">
+                    <td className="whitespace-nowrap px-4 py-2">
                       <span
                         onClick={(e) => {
                           e.stopPropagation();
@@ -290,10 +290,10 @@ export function TracesView() {
                     <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums">
                       {formatDuration(trace.durationMillis)}
                     </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
+                    <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums text-muted-foreground">
                       {trace.spanCount}
                     </td>
-                    <td className="px-4 py-2 text-center">
+                    <td className="whitespace-nowrap px-4 py-2 text-center">
                       {trace.hasError ? (
                         <AlertCircle className="mx-auto h-4 w-4 text-red-500" />
                       ) : (

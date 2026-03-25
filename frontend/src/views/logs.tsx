@@ -479,7 +479,7 @@ function LogCell({
       );
     case "_severity":
       return (
-        <td className="px-4 py-2">
+        <td className="whitespace-nowrap px-4 py-2">
           <span
             className={`text-xs font-medium ${severityColor(log.severity_text)}`}
           >
@@ -489,7 +489,7 @@ function LogCell({
       );
     case "_service":
       return (
-        <td className="px-4 py-2">
+        <td className="whitespace-nowrap px-4 py-2">
           <span
             onClick={(e) => {
               e.stopPropagation();
@@ -509,7 +509,7 @@ function LogCell({
       );
     case "_trace":
       return (
-        <td className="px-4 py-2 text-center">
+        <td className="whitespace-nowrap px-4 py-2 text-center">
           {log.trace_id ? (
             <Link
               to={`/traces/${log.trace_id}${log.span_id ? `?span=${log.span_id}` : ""}`}

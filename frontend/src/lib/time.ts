@@ -2,8 +2,7 @@
 
 export type TimeSelection =
   | { type: "relative"; key: string; label: string; seconds: number }
-  | { type: "absolute"; from: Date; to: Date }
-  | { type: "all" };
+  | { type: "absolute"; from: Date; to: Date };
 
 export interface QuickPreset {
   key: string;
@@ -27,7 +26,6 @@ export const STORAGE_KEY = "winnow-time-preset";
 
 export function parseTimeParam(param: string | null): TimeSelection {
   if (!param) return { type: "relative", ...DEFAULT_PRESET };
-  if (param === "all") return { type: "all" };
   if (param.startsWith("abs:")) {
     const parts = param.slice(4).split(",");
     if (parts.length === 2) {
@@ -45,7 +43,6 @@ export function parseTimeParam(param: string | null): TimeSelection {
 }
 
 export function serializeTimeParam(sel: TimeSelection): string {
-  if (sel.type === "all") return "all";
   if (sel.type === "absolute") {
     const fmt = (d: Date) => {
       const y = d.getFullYear();
@@ -78,14 +75,12 @@ export function fmtTime(d: Date): string {
 }
 
 export function timeSelectionLabel(sel: TimeSelection): string {
-  if (sel.type === "all") return "All time";
   if (sel.type === "relative") return sel.label;
   return `${fmtDate(sel.from)} ${fmtTime(sel.from)} → ${fmtDate(sel.to)} ${fmtTime(sel.to)}`;
 }
 
-/** Compute the time window boundaries in milliseconds from a TimeSelection. Returns null for "all". */
-export function computeTimeRange(sel: TimeSelection): { startMs: number; endMs: number } | null {
-  if (sel.type === "all") return null;
+/** Compute the time window boundaries in milliseconds from a TimeSelection. */
+export function computeTimeRange(sel: TimeSelection): { startMs: number; endMs: number } {
   if (sel.type === "absolute") {
     return { startMs: sel.from.getTime(), endMs: sel.to.getTime() };
   }
