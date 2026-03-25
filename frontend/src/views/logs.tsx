@@ -3,6 +3,8 @@ import { useSearchParams, Link } from "react-router";
 import { ListTree, ExternalLink, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { search } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
+import { TimeHistogram } from "@/components/time-histogram";
+import { serializeTimeParam } from "@/lib/time";
 import { formatTimestamp } from "@/lib/traces";
 import {
   type LogDocument,
@@ -177,12 +179,24 @@ export function LogsView() {
     }
   }, [getBaseQuery, buildSortBy, sortField, sortDir, logs]);
 
+  const [currentQuery, setCurrentQuery] = useState("*");
+
   const handleFilterChange = useCallback(
     (filters: FilterState) => {
       filterBarStateRef.current = filters;
+      setCurrentQuery(filters.query);
       fetchData(filters);
     },
     [fetchData],
+  );
+
+  const handleHistogramRangeSelect = useCallback(
+    (from: Date, to: Date) => {
+      const next = new URLSearchParams(searchParams);
+      next.set("time", serializeTimeParam({ type: "absolute", from, to }));
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
   );
 
   const handleSort = useCallback(
@@ -261,6 +275,12 @@ export function LogsView() {
         timestampField="timestamp_nanos"
         onFilterChange={handleFilterChange}
         trailing={tracesLink}
+      />
+      <TimeHistogram
+        index="otel-logs-v0_9"
+        timestampField="timestamp_nanos"
+        query={currentQuery}
+        onRangeSelect={handleHistogramRangeSelect}
       />
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">

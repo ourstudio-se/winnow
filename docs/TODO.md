@@ -108,6 +108,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] **Sortable log columns** — clickable column headers with sort indicators (▲/▼); cycles desc → asc → reset; backend sort via Quickwit `sort_by`; cursor pagination for default timestamp sort, `start_offset` for custom sorts; sort preference persisted in localStorage
 - [x] **Raw query mode** — toggle on FilterBar switches between chip-based filters and a freeform Tantivy query input; URL-driven via `q` param (presence = raw mode); Ctrl+Enter or Run button submits; raw query wrapped in parens to preserve AND-join with time range; cross-view links (Logs→Traces, Traces→Service Map) carry `q` param
 - [x] **Raw query autocomplete** — token-at-cursor parsing suggests field names (from discovered fields) and values (via terms agg, cached per field); keyboard nav (Arrow/Tab/Enter/Escape); absolute-positioned dropdown; value insertion with quoting; `tantivy-tokens.ts` pure parsing module + `RawQueryInput` component
+- [x] **Time histogram** — Kibana-style bar chart between FilterBar and data table in logs + traces views; uses Quickwit `histogram` agg on u64 nanosecond timestamp fields; auto-sized "nice" intervals (1s–1d); plain SVG bars with drag-to-select that zooms the time range; tooltip on hover; shared `time.ts` module extracted from FilterBar; FilterBar syncs external URL `time` param changes; second-precision absolute time serialization
 - [ ] Verify: can see service map with real edges, click through to traces and logs
 
 ## Index Metadata Endpoint

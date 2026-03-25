@@ -3,6 +3,8 @@ import { useNavigate, useSearchParams, Link } from "react-router";
 import { AlertCircle, Map } from "lucide-react";
 import { search } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
+import { TimeHistogram } from "@/components/time-histogram";
+import { serializeTimeParam } from "@/lib/time";
 import {
   type SpanDocument,
   type TraceSummary,
@@ -128,12 +130,24 @@ export function TracesView() {
     }
   }, [getBaseQuery, spans]);
 
+  const [currentQuery, setCurrentQuery] = useState("*");
+
   const handleFilterChange = useCallback(
     (filters: FilterState) => {
       filterBarStateRef.current = filters;
+      setCurrentQuery(filters.query);
       fetchData(filters);
     },
     [fetchData],
+  );
+
+  const handleHistogramRangeSelect = useCallback(
+    (from: Date, to: Date) => {
+      const next = new URLSearchParams(searchParams);
+      next.set("time", serializeTimeParam({ type: "absolute", from, to }));
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
   );
 
   const serviceMapLink = useMemo(() => {
@@ -166,6 +180,11 @@ export function TracesView() {
         onFilterChange={handleFilterChange}
         resolvedLabels={resolvedLabels}
         trailing={serviceMapLink}
+      />
+      <TimeHistogram
+        index="otel-traces-v0_9"
+        query={currentQuery}
+        onRangeSelect={handleHistogramRangeSelect}
       />
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">

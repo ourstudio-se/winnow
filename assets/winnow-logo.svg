@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5200 1000" width="5200" height="1000">
+  <!-- Winnow logo: icon + "WINNOW" text side-by-side -->
+
+  <!-- === Icon (same as winnow-icon.svg) === -->
+
+  <!-- Bracket [ -->
+  <rect x="0"   y="0"   width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="0"   width="100" height="100" fill="#CC3333"/>
+  <rect x="0"   y="100" width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="100" width="100" height="100" fill="#CC3333"/>
+  <rect x="0"   y="200" width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="200" width="100" height="100" fill="#CC3333"/>
+  <rect x="0"   y="300" width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="300" width="100" height="100" fill="#CC3333"/>
+  <rect x="0"   y="400" width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="400" width="100" height="100" fill="#CC3333"/>
+  <rect x="0"   y="500" width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="500" width="100" height="100" fill="#CC3333"/>
+  <rect x="0"   y="600" width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="600" width="100" height="100" fill="#CC3333"/>
+  <rect x="0"   y="700" width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="700" width="100" height="100" fill="#CC3333"/>
+  <rect x="0"   y="800" width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="800" width="100" height="100" fill="#CC3333"/>
+  <rect x="0"   y="900" width="100" height="100" fill="#CC3333"/>
+  <rect x="100" y="900" width="100" height="100" fill="#CC3333"/>
+  <rect x="200" y="0"   width="100" height="100" fill="#CC3333"/>
+  <rect x="300" y="0"   width="100" height="100" fill="#CC3333"/>
+  <rect x="200" y="100" width="100" height="100" fill="#CC3333"/>
+  <rect x="300" y="100" width="100" height="100" fill="#CC3333"/>
+  <rect x="200" y="800" width="100" height="100" fill="#CC3333"/>
+  <rect x="300" y="800" width="100" height="100" fill="#CC3333"/>
+  <rect x="200" y="900" width="100" height="100" fill="#CC3333"/>
+  <rect x="300" y="900" width="100" height="100" fill="#CC3333"/>
+
+  <!-- First chevron > -->
+  <rect x="500" y="0"   width="100" height="100" fill="#CC3333"/>
+  <rect x="500" y="100" width="100" height="100" fill="#CC3333"/>
+  <rect x="600" y="200" width="100" height="100" fill="#CC3333"/>
+  <rect x="600" y="300" width="100" height="100" fill="#CC3333"/>
+  <rect x="700" y="400" width="100" height="100" fill="#CC3333"/>
+  <rect x="700" y="500" width="100" height="100" fill="#CC3333"/>
+  <rect x="600" y="600" width="100" height="100" fill="#CC3333"/>
+  <rect x="600" y="700" width="100" height="100" fill="#CC3333"/>
+  <rect x="500" y="800" width="100" height="100" fill="#CC3333"/>
+  <rect x="500" y="900" width="100" height="100" fill="#CC3333"/>
+
+  <!-- Second chevron > -->
+  <rect x="800"  y="0"   width="100" height="100" fill="#CC3333"/>
+  <rect x="800"  y="100" width="100" height="100" fill="#CC3333"/>
+  <rect x="900"  y="200" width="100" height="100" fill="#CC3333"/>
+  <rect x="900"  y="300" width="100" height="100" fill="#CC3333"/>
+  <rect x="1000" y="400" width="100" height="100" fill="#CC3333"/>
+  <rect x="1000" y="500" width="100" height="100" fill="#CC3333"/>
+  <rect x="900"  y="600" width="100" height="100" fill="#CC3333"/>
+  <rect x="900"  y="700" width="100" height="100" fill="#CC3333"/>
+  <rect x="800"  y="800" width="100" height="100" fill="#CC3333"/>
+  <rect x="800"  y="900" width="100" height="100" fill="#CC3333"/>
+
+  <!-- Dissolve/scatter trail -->
+  <rect x="1100" y="100" width="100" height="100" fill="#CC3333"/>
+  <rect x="1200" y="300" width="100" height="100" fill="#CC3333"/>
+  <rect x="1100" y="500" width="100" height="100" fill="#CC3333"/>
+  <rect x="1200" y="700" width="100" height="100" fill="#CC3333"/>
+  <rect x="1100" y="900" width="100" height="100" fill="#CC3333"/>
+
+  <!-- === "WINNOW" text === -->
+  <text x="1550" y="740" font-family="Inter, sans-serif" font-weight="800" font-size="680" fill="#CC3333" letter-spacing="40">WINNOW</text>
+</svg>

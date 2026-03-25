@@ -7,6 +7,17 @@ import {
   search as apiSearch,
   type IndexId,
 } from "@/lib/api";
+import {
+  type TimeSelection,
+  QUICK_PRESETS,
+  DEFAULT_PRESET,
+  STORAGE_KEY,
+  parseTimeParam,
+  serializeTimeParam,
+  fmtDate,
+  fmtTime,
+  timeSelectionLabel,
+} from "@/lib/time";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -40,87 +51,6 @@ interface ActiveFilter {
 interface DiscoveredField {
   field: string;
   kind: "text" | "bool";
-}
-
-type TimeSelection =
-  | { type: "relative"; key: string; label: string; seconds: number }
-  | { type: "absolute"; from: Date; to: Date }
-  | { type: "all" };
-
-interface QuickPreset {
-  key: string;
-  label: string;
-  seconds: number;
-}
-
-const QUICK_PRESETS: QuickPreset[] = [
-  { key: "15m", label: "Last 15 minutes", seconds: 900 },
-  { key: "1h", label: "Last 1 hour", seconds: 3600 },
-  { key: "4h", label: "Last 4 hours", seconds: 14400 },
-  { key: "12h", label: "Last 12 hours", seconds: 43200 },
-  { key: "24h", label: "Last 24 hours", seconds: 86400 },
-  { key: "2d", label: "Last 2 days", seconds: 172800 },
-  { key: "7d", label: "Last 7 days", seconds: 604800 },
-  { key: "30d", label: "Last 30 days", seconds: 2592000 },
-];
-
-const DEFAULT_PRESET = QUICK_PRESETS[1]; // "Last 1 hour"
-const STORAGE_KEY = "winnow-time-preset";
-
-function parseTimeParam(param: string | null): TimeSelection {
-  if (!param) return { type: "relative", ...DEFAULT_PRESET };
-  if (param === "all") return { type: "all" };
-  if (param.startsWith("abs:")) {
-    const parts = param.slice(4).split(",");
-    if (parts.length === 2) {
-      const from = new Date(parts[0]);
-      const to = new Date(parts[1]);
-      if (!isNaN(from.getTime()) && !isNaN(to.getTime())) {
-        return { type: "absolute", from, to };
-      }
-    }
-    return { type: "relative", ...DEFAULT_PRESET };
-  }
-  const preset = QUICK_PRESETS.find((p) => p.key === param);
-  if (preset) return { type: "relative", ...preset };
-  // Backward compat: old keys like "6h" that no longer exist
-  return { type: "relative", ...DEFAULT_PRESET };
-}
-
-function serializeTimeParam(sel: TimeSelection): string {
-  if (sel.type === "all") return "all";
-  if (sel.type === "absolute") {
-    const fmt = (d: Date) => {
-      // Format as local ISO without seconds: YYYY-MM-DDTHH:mm
-      const y = d.getFullYear();
-      const mo = String(d.getMonth() + 1).padStart(2, "0");
-      const da = String(d.getDate()).padStart(2, "0");
-      const h = String(d.getHours()).padStart(2, "0");
-      const mi = String(d.getMinutes()).padStart(2, "0");
-      return `${y}-${mo}-${da}T${h}:${mi}`;
-    };
-    return `abs:${fmt(sel.from)},${fmt(sel.to)}`;
-  }
-  return sel.key;
-}
-
-function fmtDate(d: Date): string {
-  const y = d.getFullYear();
-  const mo = String(d.getMonth() + 1).padStart(2, "0");
-  const da = String(d.getDate()).padStart(2, "0");
-  return `${y}-${mo}-${da}`;
-}
-
-function fmtTime(d: Date): string {
-  const h = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${h}:${mi}`;
-}
-
-function timeSelectionLabel(sel: TimeSelection): string {
-  if (sel.type === "all") return "All time";
-  if (sel.type === "relative") return sel.label;
-  return `${fmtDate(sel.from)} ${fmtTime(sel.from)} → ${fmtDate(sel.to)} ${fmtTime(sel.to)}`;
 }
 
 // Fields not useful as user-facing filters
@@ -326,6 +256,17 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     // Only on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Sync timeSelection from URL when it changes externally (e.g. histogram drag-select)
+  useEffect(() => {
+    const urlTime = searchParams.get("time");
+    if (urlTime && urlTime !== serializeTimeParam(timeSelection)) {
+      const parsed = parseTimeParam(urlTime);
+      setTimeSelection(parsed);
+      localStorage.setItem(STORAGE_KEY, urlTime);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // Discover fields on mount / index change
   useEffect(() => {
