@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate realistic OTel traces and logs against the telemetry-experiment backend.
+"""Generate realistic OTel traces and logs against the winnow backend.
 
 Simulates a microservice topology:
   api-gateway -> user-service -> postgres
@@ -211,7 +211,7 @@ def simulate_request(providers, inject_error):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate OTel traces/logs for telemetry-experiment"
+        description="Generate OTel traces/logs for winnow"
     )
     parser.add_argument(
         "--endpoint",

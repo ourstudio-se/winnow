@@ -160,13 +160,13 @@ Single `FROM scratch` image containing:
 ```
 docker run -p 8080:8080 \
   -e QUICKWIT_URL=http://quickwit:7280 \
-  telemetry-experiment:latest
+  winnow:latest
 ```
 
 ### Nix Flake
 ```
-nix run github:user/telemetry-experiment
-nix build github:user/telemetry-experiment#docker-image
+nix run github:ourstudio-se/winnow
+nix build github:ourstudio-se/winnow#docker-image
 ```
 
 Flake outputs:

@@ -1,4 +1,4 @@
-# telemetry-experiment
+# winnow
 
 An opinionated observability UI built on Quickwit. Born from frustration with Grafana.
 

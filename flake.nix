@@ -108,7 +108,7 @@
         '';
       in {
         packages.frontend = pkgs.stdenvNoCC.mkDerivation {
-          pname = "telemetry-experiment-frontend";
+          pname = "winnow-frontend";
           version = "0.0.0";
           src = ./frontend;
           nativeBuildInputs = [
@@ -117,7 +117,7 @@
             pkgs.pnpmConfigHook
           ];
           pnpmDeps = pkgs.fetchPnpmDeps {
-            pname = "telemetry-experiment-frontend";
+            pname = "winnow-frontend";
             src = ./frontend;
             hash = "sha256-tKSerRVTBY4pSjaK0SuwGx/OFTMRg2gHA7ELKk6bWqo=";
             fetcherVersion = 3;
@@ -131,7 +131,7 @@
         };
 
         packages.default = env.package {
-          pname = "telemetry-experiment";
+          pname = "winnow";
           version = "0.0.0";
           src = ./backend;
 
@@ -179,7 +179,7 @@
 
           shellHook = ''
             export QUICKWIT_URL=http://localhost:7290
-            echo "telemetry-experiment dev shell"
+            echo "winnow dev shell"
             echo "  zig:  $(zig version)"
             echo "  node: $(node --version)"
             echo "  pnpm: $(pnpm --version)"
@@ -188,7 +188,7 @@
 
         checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           integration = pkgs.callPackage ./tests/integration.nix {
-            telemetry-experiment = self.packages.${system}.default;
+            winnow = self.packages.${system}.default;
           };
         };
 

@@ -1,6 +1,6 @@
 {
   pkgs,
-  telemetry-experiment,
+  winnow,
 }: let
   quickwitImage = pkgs.dockerTools.pullImage {
     imageName = "quickwit/quickwit";
@@ -125,7 +125,7 @@ in
       virtualisation.docker.enable = true;
 
       environment.systemPackages = [
-        telemetry-experiment
+        winnow
         sendTraces
         sendLogs
         pkgs.curl
@@ -207,7 +207,7 @@ in
         # Start our server
         machine.succeed(
             "QUICKWIT_URL=http://localhost:7280 "
-            "telemetry-experiment "
+            "winnow "
             ">/tmp/server.log 2>&1 &"
         )
         try:

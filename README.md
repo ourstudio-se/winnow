@@ -42,19 +42,19 @@ Build and run directly from the repository:
 
 ```
 nix build
-./result/bin/telemetry-experiment
+./result/bin/winnow
 ```
 
 By default the server listens on port 8080 and expects Quickwit at `http://localhost:7280`. Configure via environment variables:
 
 ```
-QUICKWIT_URL=http://quickwit.example.com:7280 ./result/bin/telemetry-experiment
+QUICKWIT_URL=http://quickwit.example.com:7280 ./result/bin/winnow
 ```
 
 You can also run without cloning, directly from a flake reference:
 
 ```
-nix run github:user/telemetry-experiment
+nix run github:ourstudio-se/winnow
 ```
 
 ### Sending data

@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
     });
     exe_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
 
-    const exe = b.addExecutable(.{ .name = "telemetry-experiment", .root_module = exe_mod });
+    const exe = b.addExecutable(.{ .name = "winnow", .root_module = exe_mod });
 
     b.installArtifact(exe);
 
