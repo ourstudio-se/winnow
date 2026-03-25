@@ -93,27 +93,31 @@ export function computeTimeRange(sel: TimeSelection): { startMs: number; endMs: 
   return { startMs: endMs - sel.seconds * 1000, endMs };
 }
 
-/** "Nice" bucket intervals in milliseconds, from 1 second to 1 day. */
+/** "Nice" bucket intervals in milliseconds, from 1 second to 1 week. */
 const NICE_INTERVALS_MS = [
-  1_000,       // 1s
-  5_000,       // 5s
-  10_000,      // 10s
-  15_000,      // 15s
-  30_000,      // 30s
-  60_000,      // 1m
-  300_000,     // 5m
-  600_000,     // 10m
-  900_000,     // 15m
-  1_800_000,   // 30m
-  3_600_000,   // 1h
-  10_800_000,  // 3h
-  21_600_000,  // 6h
-  43_200_000,  // 12h
-  86_400_000,  // 1d
+  1_000,         // 1s
+  5_000,         // 5s
+  10_000,        // 10s
+  15_000,        // 15s
+  30_000,        // 30s
+  60_000,        // 1m
+  120_000,       // 2m
+  300_000,       // 5m
+  600_000,       // 10m
+  900_000,       // 15m
+  1_800_000,     // 30m
+  3_600_000,     // 1h
+  7_200_000,     // 2h
+  10_800_000,    // 3h
+  21_600_000,    // 6h
+  43_200_000,    // 12h
+  86_400_000,    // 1d
+  172_800_000,   // 2d
+  604_800_000,   // 1w
 ];
 
 /** Pick the smallest "nice" interval that produces at most `maxBuckets` buckets for the given window. */
-export function pickInterval(windowMs: number, maxBuckets = 80): number {
+export function pickInterval(windowMs: number, maxBuckets = 100): number {
   for (const interval of NICE_INTERVALS_MS) {
     if (windowMs / interval <= maxBuckets) return interval;
   }

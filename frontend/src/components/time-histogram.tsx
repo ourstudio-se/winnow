@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { search } from "@/lib/api";
 import type { IndexId } from "@/lib/api";
@@ -120,18 +120,24 @@ export function TimeHistogram({
   } | null>(null);
 
   const svgRef = useRef<SVGSVGElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
 
-  // Observe container width
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) =>
-      setContainerWidth(entry.contentRect.width),
-    );
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  // Observe container width via ref callback (survives mount/unmount cycles)
+  const roRef = useRef<ResizeObserver | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const containerCallbackRef = (el: HTMLDivElement | null) => {
+    if (roRef.current) {
+      roRef.current.disconnect();
+      roRef.current = null;
+    }
+    containerRef.current = el;
+    if (el) {
+      const ro = new ResizeObserver(([entry]) =>
+        setContainerWidth(entry.contentRect.width),
+      );
+      ro.observe(el);
+      roRef.current = ro;
+    }
+  };
 
   // Parse time range from URL
   const timeSel = parseTimeParam(searchParams.get("time"));
@@ -183,11 +189,14 @@ export function TimeHistogram({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, index, timestampField, timeRange?.startMs, timeRange?.endMs, containerWidth]);
 
-  // Don't render for "all time" or when there's no data yet
-  if (!timeRange) return null;
+  const windowMs = timeRange ? timeRange.endMs - timeRange.startMs : 0;
+  const hasWindow = timeRange !== null && windowMs > 0;
 
-  const windowMs = timeRange.endMs - timeRange.startMs;
-  if (windowMs <= 0) return null;
+  // For "all time" or invalid ranges, render a hidden container so the
+  // ResizeObserver stays attached and containerWidth is ready when we switch back.
+  if (!hasWindow) {
+    return <div ref={containerCallbackRef} className="hidden" />;
+  }
 
   // Filter buckets to the visible window
   const startNs = timeRange.startMs * 1_000_000;
@@ -223,40 +232,35 @@ export function TimeHistogram({
     setDragCurrentX(x);
   }
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<SVGSVGElement>) => {
-      // Update tooltip
-      const rect = svgRef.current?.getBoundingClientRect();
-      if (!rect || !timeRange) return;
-      const x = e.clientX - rect.left;
+  function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || !timeRange) return;
+    const x = e.clientX - rect.left;
 
-      if (dragStartX !== null) {
-        setDragCurrentX(x);
-        setTooltip(null);
+    if (dragStartX !== null) {
+      setDragCurrentX(x);
+      setTooltip(null);
+    } else {
+      // Find hovered bucket
+      const mouseMs = msFromX(x);
+      const mouseNs = mouseMs * 1_000_000;
+      const hovered = visibleBuckets.find(
+        (b) => mouseNs >= b.key && mouseNs < b.key + intervalNs,
+      );
+      if (hovered && (e.clientY - rect.top) <= BAR_HEIGHT) {
+        const bucketStartMs = hovered.key / 1_000_000;
+        const bucketEndMs = bucketStartMs + intervalMs;
+        setTooltip({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+          timeRange: `${formatBucketTime(bucketStartMs)} – ${formatBucketTime(bucketEndMs)}`,
+          count: hovered.doc_count,
+        });
       } else {
-        // Find hovered bucket
-        const mouseMs = msFromX(x);
-        const mouseNs = mouseMs * 1_000_000;
-        const hovered = visibleBuckets.find(
-          (b) => mouseNs >= b.key && mouseNs < b.key + intervalNs,
-        );
-        if (hovered && (e.clientY - rect.top) <= BAR_HEIGHT) {
-          const bucketStartMs = hovered.key / 1_000_000;
-          const bucketEndMs = bucketStartMs + intervalMs;
-          setTooltip({
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-            timeRange: `${formatBucketTime(bucketStartMs)} – ${formatBucketTime(bucketEndMs)}`,
-            count: hovered.doc_count,
-          });
-        } else {
-          setTooltip(null);
-        }
+        setTooltip(null);
       }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [dragStartX, visibleBuckets, intervalNs, intervalMs, containerWidth, timeRange?.startMs, timeRange?.endMs, windowMs],
-  );
+    }
+  }
 
   function handleMouseUp(_e: React.MouseEvent<SVGSVGElement>) {
     if (dragStartX === null || dragCurrentX === null) return;
@@ -290,8 +294,8 @@ export function TimeHistogram({
 
   return (
     <div
-      ref={containerRef}
-      className="relative border-b border-border bg-card px-3"
+      ref={containerCallbackRef}
+      className="relative overflow-hidden border-b border-border bg-card px-3"
       style={{ height: CHART_HEIGHT + 8, paddingTop: 4, paddingBottom: 4 }}
     >
       {containerWidth > 0 && (
@@ -299,6 +303,7 @@ export function TimeHistogram({
           ref={svgRef}
           width={containerWidth}
           height={CHART_HEIGHT}
+          overflow="visible"
           className={`block ${loading && buckets.length === 0 ? "opacity-30" : ""}`}
           style={{ cursor: dragging ? "col-resize" : "crosshair" }}
           onMouseDown={handleMouseDown}
