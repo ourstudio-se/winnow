@@ -127,7 +127,10 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 
 ## Phase 7: Single Binary Packaging
 
-- [ ] Build frontend (`pnpm build`) and embed dist/ into the Zig binary via `@embedFile` or `std.Build` install step
-- [ ] Serve embedded assets from `handleStatic()` with correct MIME types
-- [ ] Add `packages.default` to `flake.nix` that builds the full binary
-- [ ] Verify: `nix build && ./result/bin/telemetry-experiment` serves the UI and API from one process
+- [x] Build frontend (`pnpm build`) and embed dist/ into the Zig binary via `@embedFile`
+- [x] `scripts/embed-frontend.sh` generates `static_assets.zig` from frontend dist
+- [x] Serve embedded assets from `handleStatic()` with correct MIME types and cache headers
+- [x] SPA fallback: unrecognized paths serve `index.html` for client-side routing
+- [x] `packages.frontend` nix derivation builds React app via pnpm
+- [x] `packages.default` nix derivation embeds frontend + builds single static binary
+- [x] Verify: `nix build` produces 8.7MB statically-linked binary with embedded frontend

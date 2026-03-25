@@ -8,3 +8,7 @@ zig-out
 
 # Generated protobuf code (regenerate with: zig build gen-proto)
 backend/src/proto/
+
+# Generated frontend asset embedding (regenerate with: scripts/embed-frontend.sh)
+backend/src/static_assets.zig
+backend/src/frontend-dist

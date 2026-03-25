@@ -9,6 +9,7 @@ const otel_index = @import("otel_index.zig");
 const otel_logs_index = @import("otel_logs_index.zig");
 const ingest = @import("ingest.zig");
 const api = @import("api.zig");
+const static_assets = @import("static_assets.zig");
 
 const IndexConfig = struct {
     traces: []const u8,
@@ -153,15 +154,51 @@ fn handleConnection(conn: net.Server.Connection, ctx: *const Context) void {
 }
 
 fn handleStatic(request: *http.Server.Request) !void {
-    try request.respond("TODO: serve frontend assets\n", .{
-        .extra_headers = &.{
-            .{ .name = "content-type", .value = "text/plain" },
-        },
-    });
+    // Strip query string for lookup
+    const target = request.head.target;
+    const path = if (std.mem.indexOfScalar(u8, target, '?')) |i| target[0..i] else target;
+
+    if (static_assets.lookup(path)) |asset| {
+        const cache_header: http.Header = if (asset.cacheable)
+            .{ .name = "cache-control", .value = "public, max-age=31536000, immutable" }
+        else
+            .{ .name = "cache-control", .value = "no-cache" };
+        try request.respond(asset.content, .{
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = asset.content_type },
+                cache_header,
+            },
+        });
+    } else {
+        // SPA fallback: serve index.html for unrecognized paths (client-side routing)
+        if (static_assets.lookup("/")) |index| {
+            try request.respond(index.content, .{
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = "text/html" },
+                    .{ .name = "cache-control", .value = "no-cache" },
+                },
+            });
+        } else {
+            try request.respond("Not Found\n", .{
+                .status = .not_found,
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = "text/plain" },
+                },
+            });
+        }
+    }
 }
 
-test "basic server compiles" {
-    _ = &handleStatic;
+test "static asset lookup" {
+    // Verify the lookup function exists and returns null for unknown paths
+    const result = static_assets.lookup("/nonexistent");
+    try std.testing.expect(result == null);
+
+    // Root should resolve to index.html
+    const root = static_assets.lookup("/");
+    try std.testing.expect(root != null);
+    try std.testing.expectEqualStrings("text/html", root.?.content_type);
+    try std.testing.expect(!root.?.cacheable);
 }
 
 test "otlp proto types are importable" {
