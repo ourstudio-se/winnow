@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { X, Plus, Search, Loader2, Calendar, ChevronDown, Code, Play } from "lucide-react";
+import { RawQueryInput } from "@/components/raw-query-input";
 import {
   getIndexMetadata,
   search as apiSearch,
@@ -478,6 +479,15 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     return `${baseQuery} AND ${filterQuery}`;
   }
 
+  // Autocomplete value fetching — scoped only to baseQuery (the view's
+  // intrinsic scope, e.g. span_kind:3 for service map) so that suggestions
+  // show all values within the time range, not narrowed by the current filter.
+  // This lets the user discover and switch to values not in the current result set.
+  const fetchValuesForAutocomplete = useCallback(
+    (field: string) => fetchFieldValues(index, field, baseQuery),
+    [index, baseQuery],
+  );
+
   function handleFieldSelect(field: DiscoveredField) {
     setSelectedField(field);
     setPopoverStep("value");
@@ -775,18 +785,12 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
       {/* Raw query mode: text input + Run button */}
       {isRawMode && (
         <>
-          <input
-            type="text"
+          <RawQueryInput
             value={rawInput}
-            onChange={(e) => setRawInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                submitRawQuery();
-              }
-            }}
-            placeholder='service_name:"api" AND severity_number:>8'
-            className="h-7 flex-1 rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+            onChange={setRawInput}
+            onSubmit={submitRawQuery}
+            discoveredFields={discoveredFields}
+            fetchValues={fetchValuesForAutocomplete}
           />
           <Button variant="default" size="xs" className="gap-1" onClick={submitRawQuery}>
             <Play className="h-3 w-3" />

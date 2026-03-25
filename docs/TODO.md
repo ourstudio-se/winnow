@@ -107,6 +107,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] **Elasticsearch-style time picker** — Popover-based picker with quick presets (15m–30d + All time) on left panel and absolute From/To datetime-local inputs on right panel; supports relative, absolute, and "all time" selections; backward-compatible URL encoding (`?time=1h`, `?time=abs:...`, `?time=all`); persisted via URL + localStorage
 - [x] **Sortable log columns** — clickable column headers with sort indicators (▲/▼); cycles desc → asc → reset; backend sort via Quickwit `sort_by`; cursor pagination for default timestamp sort, `start_offset` for custom sorts; sort preference persisted in localStorage
 - [x] **Raw query mode** — toggle on FilterBar switches between chip-based filters and a freeform Tantivy query input; URL-driven via `q` param (presence = raw mode); Ctrl+Enter or Run button submits; raw query wrapped in parens to preserve AND-join with time range; cross-view links (Logs→Traces, Traces→Service Map) carry `q` param
+- [x] **Raw query autocomplete** — token-at-cursor parsing suggests field names (from discovered fields) and values (via terms agg, cached per field); keyboard nav (Arrow/Tab/Enter/Escape); absolute-positioned dropdown; value insertion with quoting; `tantivy-tokens.ts` pure parsing module + `RawQueryInput` component
 - [ ] Verify: can see service map with real edges, click through to traces and logs
 
 ## Index Metadata Endpoint
