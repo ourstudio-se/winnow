@@ -4,6 +4,26 @@ An opinionated observability UI built on [Quickwit](https://quickwit.io). Accept
 
 Born from frustration with Grafana's approach to observability. Instead of a general-purpose dashboarding tool that supports every backend and visualization, Winnow does fewer things and does them well. One storage backend, one interface, no configuration pages.
 
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshot1.png" alt="Service map showing service topology with call counts, latencies, and error rates" width="100%">
+</p>
+
+The service map is the primary entry point. It shows your service topology with call counts, latencies, and error rates at a glance. Click any node to drill into its traces, logs, or operations.
+
+<p align="center">
+  <img src="assets/screenshot3.png" alt="Trace detail view with span waterfall timeline and span metadata" width="100%">
+</p>
+
+The trace detail view shows a waterfall timeline of all spans in a trace. Select a span to see its attributes, resource metadata, and associated logs in the right panel.
+
+<p align="center">
+  <img src="assets/screenshot2.png" alt="Log viewer with configurable columns, filters, and time histogram" width="100%">
+</p>
+
+The log viewer supports configurable columns, filters, sortable headers, and a time histogram. Every log with a trace ID links directly to its trace.
+
 ## What it does
 
 Winnow receives OTLP data (traces and logs) over HTTP, transforms it, and ingests it into Quickwit. The frontend provides three connected views: a service map derived from trace data, a trace explorer with span waterfall timelines, and a log viewer. Everything is linked. Click a service to see its traces, click a trace to see its logs, click a log to jump to the span that produced it.
