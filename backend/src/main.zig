@@ -17,10 +17,16 @@ const IndexConfig = struct {
     logs: []const u8,
 };
 
+const ServerRole = struct {
+    collector: bool,
+    api: bool,
+};
+
 const Context = struct {
     qw: Quickwit,
     allocator: Allocator,
     indexes: IndexConfig,
+    role: ServerRole,
 };
 
 const config_mod = @import("config.zig");
@@ -118,27 +124,105 @@ pub fn main() !void {
         try ensureOrValidateIndex(arena.allocator(), qw, cfg.logs.index_id, otel_logs_index.schema, cfg.logs.retention);
     }
 
-    // Start HTTP server
-    const address = net.Address.parseIp("0.0.0.0", 8080) catch unreachable;
-    var server = try address.listen(.{
-        .reuse_address = true,
-    });
-    defer server.deinit();
+    // Determine serving topology from config
+    const serve = cfg.serve;
+    if (serve.collector == null and serve.api == null) {
+        std.log.err("no serve components enabled", .{});
+        return error.NoComponentsEnabled;
+    }
 
-    std.log.info("listening on http://0.0.0.0:8080", .{});
+    const collector_port: ?u16 = if (serve.collector) |c| c.port else null;
+    const api_port: ?u16 = if (serve.api) |a| a.port else null;
 
-    const ctx = Context{
-        .qw = qw,
-        .allocator = allocator,
-        .indexes = .{
-            .traces = cfg.traces.index_id,
-            .logs = cfg.logs.index_id,
-        },
+    const indexes = IndexConfig{
+        .traces = cfg.traces.index_id,
+        .logs = cfg.logs.index_id,
     };
 
+    // Determine if we need one or two servers
+    const same_port = if (collector_port != null and api_port != null)
+        collector_port.? == api_port.?
+    else
+        false;
+
+    if (same_port) {
+        // Single server with both roles
+        const port = collector_port.?;
+        const address = net.Address.parseIp("0.0.0.0", port) catch unreachable;
+        var server = try address.listen(.{ .reuse_address = true });
+        defer server.deinit();
+
+        std.log.info("collector + api listening on http://0.0.0.0:{d}", .{port});
+
+        const ctx = Context{
+            .qw = qw,
+            .allocator = allocator,
+            .indexes = indexes,
+            .role = .{ .collector = true, .api = true },
+        };
+
+        acceptLoop(&server, &ctx);
+    } else {
+        // Two separate servers (or one with a single role)
+        var server1: ?net.Server = null;
+        defer if (server1) |*s| s.deinit();
+        var server2: ?net.Server = null;
+        defer if (server2) |*s| s.deinit();
+
+        var ctx1: Context = undefined;
+        var ctx2: Context = undefined;
+
+        var thread1: ?std.Thread = null;
+
+        if (collector_port) |port| {
+            const address = net.Address.parseIp("0.0.0.0", port) catch unreachable;
+            server1 = try address.listen(.{ .reuse_address = true });
+            ctx1 = Context{
+                .qw = qw,
+                .allocator = allocator,
+                .indexes = indexes,
+                .role = .{ .collector = true, .api = false },
+            };
+            std.log.info("collector listening on http://0.0.0.0:{d}", .{port});
+        }
+
+        if (api_port) |port| {
+            const address = net.Address.parseIp("0.0.0.0", port) catch unreachable;
+            server2 = try address.listen(.{ .reuse_address = true });
+            ctx2 = Context{
+                .qw = qw,
+                .allocator = allocator,
+                .indexes = indexes,
+                .role = .{ .collector = false, .api = true },
+            };
+            std.log.info("api listening on http://0.0.0.0:{d}", .{port});
+        }
+
+        // Start the first server in a background thread (if it exists),
+        // run the second on the main thread
+        if (server1 != null and server2 != null) {
+            thread1 = std.Thread.spawn(.{}, acceptLoop, .{ &server1.?, &ctx1 }) catch |err| {
+                std.log.err("failed to spawn server thread: {}", .{err});
+                return err;
+            };
+            acceptLoop(&server2.?, &ctx2);
+        } else if (server1) |*s| {
+            acceptLoop(s, &ctx1);
+        } else if (server2) |*s| {
+            acceptLoop(s, &ctx2);
+        }
+
+        if (thread1) |t| t.join();
+    }
+}
+
+fn acceptLoop(server: *net.Server, ctx: *const Context) void {
     while (true) {
-        const conn = try server.accept();
-        _ = std.Thread.spawn(.{}, handleConnection, .{ conn, &ctx }) catch |err| {
+        const conn = server.accept() catch |err| {
+            std.log.err("accept error: {}", .{err});
+            continue;
+        };
+        _ = std.Thread.spawn(.{}, handleConnection, .{ conn, ctx }) catch |err| {
             std.log.err("failed to spawn thread: {}", .{err});
             continue;
         };
@@ -163,8 +247,10 @@ fn handleConnection(conn: net.Server.Connection, ctx: *const Context) void {
     var arena = std.heap.ArenaAllocator.init(ctx.allocator);
     defer arena.deinit();
 
-    // Route
+    // Route (gated by server role)
+    const role = ctx.role;
     if (std.mem.eql(u8, request.head.target, "/v1/traces")) {
+        if (!role.collector) return sendNotFound(&request);
         if (request.head.method == .POST) {
             ingest.handleTraces(&request, arena.allocator(), ctx.qw, ctx.indexes.traces) catch |err| {
                 std.log.err("ingest error: {}", .{err});
@@ -178,6 +264,7 @@ fn handleConnection(conn: net.Server.Connection, ctx: *const Context) void {
             }) catch {};
         }
     } else if (std.mem.eql(u8, request.head.target, "/v1/logs")) {
+        if (!role.collector) return sendNotFound(&request);
         if (request.head.method == .POST) {
             ingest.handleLogs(&request, arena.allocator(), ctx.qw, ctx.indexes.logs) catch |err| {
                 std.log.err("log ingest error: {}", .{err});
@@ -191,14 +278,25 @@ fn handleConnection(conn: net.Server.Connection, ctx: *const Context) void {
             }) catch {};
         }
     } else if (std.mem.startsWith(u8, request.head.target, "/api/")) {
+        if (!role.api) return sendNotFound(&request);
         api.handleApi(&request, arena.allocator(), ctx.qw, &ctx.indexes) catch |err| {
             std.log.err("api error: {}", .{err});
         };
     } else {
+        if (!role.api) return sendNotFound(&request);
         handleStatic(&request) catch |err| {
             std.log.err("static error: {}", .{err});
         };
     }
+}
+
+fn sendNotFound(request: *http.Server.Request) void {
+    request.respond("Not Found\n", .{
+        .status = .not_found,
+        .extra_headers = &.{
+            .{ .name = "content-type", .value = "text/plain" },
+        },
+    }) catch {};
 }
 
 fn handleStatic(request: *http.Server.Request) !void {

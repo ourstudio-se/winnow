@@ -87,6 +87,40 @@ Pass with `--config`:
 
 If no `--config` is given, the server looks for `./winnow.kdl` in the working directory. If no file is found, bare defaults are used.
 
+**Serve section** (optional):
+
+The `serve` block controls which components run and on which ports. By default (no `serve` block), both the collector and API run on port 8080.
+
+```kdl
+// Split collector and API onto separate ports
+serve {
+    collector port=4318
+    api port=8080
+}
+```
+
+This is useful for production deployments where you want to scale the collector (high-throughput ingest) and API (user-facing queries) independently as separate processes.
+
+```kdl
+// Collector-only instance
+serve {
+    collector port=4318
+}
+
+// API-only instance
+serve {
+    api port=8080
+}
+
+// Both on same port (equivalent to the default)
+serve {
+    collector
+    api
+}
+```
+
+When a component is disabled, its routes return 404. A `serve` block with no children is an error.
+
 **Environment variables** (override config file values):
 
 ```

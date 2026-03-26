@@ -9,10 +9,20 @@ pub const IndexSettings = struct {
     retention: ?[]const u8 = null,
 };
 
+pub const Listener = struct {
+    port: u16 = 8080,
+};
+
+pub const ServeConfig = struct {
+    collector: ?Listener = .{},
+    api: ?Listener = .{},
+};
+
 pub const Config = struct {
     quickwit_url: []const u8,
     traces: IndexSettings,
     logs: IndexSettings,
+    serve: ServeConfig = .{},
     /// Tracks which strings were heap-allocated (need freeing).
     owned: OwnedStrings = .{},
 
@@ -170,6 +180,33 @@ fn parseKdl(allocator: Allocator, source: []const u8, base: Config) !Config {
                 cfg.logs.retention = duped;
                 cfg.owned.logs_retention = true;
             }
+        } else if (std.mem.eql(u8, name, "serve")) {
+            // Start with both disabled; only listed children are enabled
+            cfg.serve = .{ .collector = null, .api = null };
+            var has_children = false;
+
+            var child_iter = doc.childIterator(node);
+            while (child_iter.next()) |child| {
+                const child_name = doc.getString(doc.nodes.getName(child));
+                const port: u16 = if (getIntProp(&doc, child, "port")) |p|
+                    std.math.cast(u16, p) orelse return error.ConfigParseError
+                else
+                    8080;
+
+                if (std.mem.eql(u8, child_name, "collector")) {
+                    cfg.serve.collector = .{ .port = port };
+                    has_children = true;
+                } else if (std.mem.eql(u8, child_name, "api")) {
+                    cfg.serve.api = .{ .port = port };
+                    has_children = true;
+                } else {
+                    return error.ConfigParseError;
+                }
+            }
+
+            if (!has_children) {
+                return error.ConfigParseError;
+            }
         }
     }
 
@@ -185,6 +222,27 @@ fn getStringProp(doc: *const kdl.Document, node: kdl.NodeHandle, key: []const u8
         if (std.mem.eql(u8, prop_name, key)) {
             switch (prop.value) {
                 .string => |s| return doc.getString(s),
+                else => return null,
+            }
+        }
+    }
+    return null;
+}
+
+/// Get an integer property value from a KDL node.
+/// Also accepts string values and parses them as integers (e.g. port="4318").
+fn getIntProp(doc: *const kdl.Document, node: kdl.NodeHandle, key: []const u8) ?i128 {
+    const prop_range = doc.nodes.getPropRange(node);
+    const props = doc.values.getProperties(prop_range);
+    for (props) |prop| {
+        const prop_name = doc.getString(prop.name);
+        if (std.mem.eql(u8, prop_name, key)) {
+            switch (prop.value) {
+                .integer => |i| return i,
+                .string => |s| {
+                    const str = doc.getString(s);
+                    return std.fmt.parseInt(i128, str, 10) catch null;
+                },
                 else => return null,
             }
         }
@@ -248,4 +306,106 @@ test "defaults have expected values" {
     try std.testing.expectEqualStrings("winnow-logs-v0_1", defaults.logs.index_id);
     try std.testing.expect(defaults.traces.retention == null);
     try std.testing.expect(defaults.logs.retention == null);
+    // Default serve: both enabled on 8080
+    try std.testing.expect(defaults.serve.collector != null);
+    try std.testing.expect(defaults.serve.api != null);
+    try std.testing.expectEqual(@as(u16, 8080), defaults.serve.collector.?.port);
+    try std.testing.expectEqual(@as(u16, 8080), defaults.serve.api.?.port);
+}
+
+test "parseKdl serve block with both components and ports" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\serve {
+        \\    collector port=4318
+        \\    api port=8080
+        \\}
+    ;
+
+    const cfg = try parseKdl(allocator, source, defaults);
+    defer cfg.deinit(allocator);
+
+    try std.testing.expect(cfg.serve.collector != null);
+    try std.testing.expect(cfg.serve.api != null);
+    try std.testing.expectEqual(@as(u16, 4318), cfg.serve.collector.?.port);
+    try std.testing.expectEqual(@as(u16, 8080), cfg.serve.api.?.port);
+}
+
+test "parseKdl serve block with only collector" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\serve {
+        \\    collector port=4318
+        \\}
+    ;
+
+    const cfg = try parseKdl(allocator, source, defaults);
+    defer cfg.deinit(allocator);
+
+    try std.testing.expect(cfg.serve.collector != null);
+    try std.testing.expect(cfg.serve.api == null);
+    try std.testing.expectEqual(@as(u16, 4318), cfg.serve.collector.?.port);
+}
+
+test "parseKdl serve block with no children is error" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\serve {
+        \\}
+    ;
+
+    const result = parseKdl(allocator, source, defaults);
+    try std.testing.expectError(error.ConfigParseError, result);
+}
+
+test "parseKdl no serve block uses defaults" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\quickwit url="http://example.com:7280"
+    ;
+
+    const cfg = try parseKdl(allocator, source, defaults);
+    defer cfg.deinit(allocator);
+
+    // Should keep default serve config: both on 8080
+    try std.testing.expect(cfg.serve.collector != null);
+    try std.testing.expect(cfg.serve.api != null);
+    try std.testing.expectEqual(@as(u16, 8080), cfg.serve.collector.?.port);
+    try std.testing.expectEqual(@as(u16, 8080), cfg.serve.api.?.port);
+}
+
+test "parseKdl serve block with port as string" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\serve {
+        \\    collector port="4318"
+        \\    api port="9090"
+        \\}
+    ;
+
+    const cfg = try parseKdl(allocator, source, defaults);
+    defer cfg.deinit(allocator);
+
+    try std.testing.expect(cfg.serve.collector != null);
+    try std.testing.expect(cfg.serve.api != null);
+    try std.testing.expectEqual(@as(u16, 4318), cfg.serve.collector.?.port);
+    try std.testing.expectEqual(@as(u16, 9090), cfg.serve.api.?.port);
+}
+
+test "parseKdl serve block with default port" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\serve {
+        \\    collector
+        \\    api
+        \\}
+    ;
+
+    const cfg = try parseKdl(allocator, source, defaults);
+    defer cfg.deinit(allocator);
+
+    try std.testing.expect(cfg.serve.collector != null);
+    try std.testing.expect(cfg.serve.api != null);
+    try std.testing.expectEqual(@as(u16, 8080), cfg.serve.collector.?.port);
+    try std.testing.expectEqual(@as(u16, 8080), cfg.serve.api.?.port);
 }

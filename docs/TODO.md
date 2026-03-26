@@ -137,6 +137,22 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [ ] Verify: frontend loads and all views work with dynamic index names
 - [ ] Verify: `nix build` succeeds
 
+## Configurable Serve Section (Collector/API Split)
+
+- [x] Add `Listener` and `ServeConfig` types to `config.zig`
+- [x] Add `getIntProp` helper for parsing integer KDL properties
+- [x] Parse `serve` block in KDL config (children enable components, `port` property per child)
+- [x] Add `serve` field to `Config` with backward-compatible defaults (both on 8080)
+- [x] Config tests: both components + ports, collector-only, empty serve block error, default, port-as-string, default port
+- [x] Add `ServerRole` struct and `acceptLoop` function to `main.zig`
+- [x] Role-gated routing in `handleConnection` (disabled components return 404)
+- [x] Multi-port startup: single server when same port, two servers in separate threads when different ports
+- [x] Update README.md with serve block documentation
+- [ ] Verify: `zig build test` passes
+- [ ] Verify: `zig build run` with no config — backward compatible, everything on 8080
+- [ ] Verify: `zig build run` with serve block (collector-only) — only collector endpoints respond
+- [ ] Verify: `zig build run` with split ports — both components on respective ports
+
 ## Dev Tooling
 
 - [x] `docker-compose.yml` — Quickwit v0.9.0-rc with persistent volume (ports 7290/7291)
