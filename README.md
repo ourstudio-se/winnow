@@ -69,15 +69,36 @@ The server accepts `POST /v1/traces` and `POST /v1/logs` in OTLP protobuf format
 
 ### Configuration
 
-All configuration is via environment variables.
+Configuration is resolved in order: defaults < KDL config file < environment variables.
+
+**Config file** (optional):
+
+```kdl
+quickwit url="http://localhost:7280"
+traces index="winnow-traces-v0_1" retention="90 days"
+logs index="winnow-logs-v0_1" retention="30 days"
+```
+
+Pass with `--config`:
+
+```
+./result/bin/winnow --config /path/to/winnow.kdl
+```
+
+If no `--config` is given, the server looks for `./winnow.kdl` in the working directory. If no file is found, bare defaults are used.
+
+**Environment variables** (override config file values):
 
 ```
 QUICKWIT_URL            Quickwit base URL (default: http://localhost:7280)
-OTEL_TRACES_INDEX       Quickwit index for traces (default: otel-traces-v0_9)
-OTEL_LOGS_INDEX         Quickwit index for logs (default: otel-logs-v0_9)
+WINNOW_TRACES_INDEX     Quickwit index for traces (default: winnow-traces-v0_1)
+WINNOW_LOGS_INDEX       Quickwit index for logs (default: winnow-logs-v0_1)
 ```
 
-The server creates the required Quickwit indexes on startup if they don't already exist.
+**Startup behavior:**
+
+- If an index doesn't exist, the server creates it (with retention policy if configured).
+- If an index already exists, the server validates its schema against the expected field mappings. On a mismatch (wrong field type, missing field, wrong tokenizer) the server exits with an error. Retention mismatches produce a warning but don't prevent startup.
 
 ## Development
 
