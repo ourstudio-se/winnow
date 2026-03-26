@@ -3,9 +3,13 @@ import { useSearchParams } from "react-router";
 import { X, Plus, Search, Loader2, Calendar, ChevronDown, Code, Play } from "lucide-react";
 import { RawQueryInput } from "@/components/raw-query-input";
 import {
-  getIndexMetadata,
-  search as apiSearch,
-  type IndexId,
+  getTracesMetadata,
+  getLogsMetadata,
+  searchTraces,
+  searchLogs,
+  type SearchRequest,
+  type SearchResponse,
+  type IndexMetadataResponse,
 } from "@/lib/api";
 import {
   type TimeSelection,
@@ -30,7 +34,7 @@ export interface FilterState {
 }
 
 interface FilterBarProps {
-  index: IndexId;
+  index: "traces" | "logs";
   onFilterChange: (filters: FilterState) => void;
   /** Optional base query to scope autocomplete suggestions (e.g. "span_kind:3"). Defaults to "*". */
   baseQuery?: string;
@@ -88,8 +92,17 @@ function formatFieldPath(field: string): string {
   return field;
 }
 
-async function fetchFieldValues(index: IndexId, field: string, baseQuery = "*"): Promise<string[]> {
-  const res = await apiSearch<unknown>(index, {
+function getSearchFn(index: "traces" | "logs"): <T>(req: SearchRequest) => Promise<SearchResponse<T>> {
+  return index === "traces" ? searchTraces : searchLogs;
+}
+
+function getMetadataFn(index: "traces" | "logs"): () => Promise<IndexMetadataResponse> {
+  return index === "traces" ? getTracesMetadata : getLogsMetadata;
+}
+
+async function fetchFieldValues(index: "traces" | "logs", field: string, baseQuery = "*"): Promise<string[]> {
+  const doSearch = getSearchFn(index);
+  const res = await doSearch<unknown>({
     query: baseQuery,
     max_hits: 0,
     aggs: {
@@ -112,11 +125,12 @@ function collectKeys(obj: unknown, prefix: string, out: Set<string>) {
   }
 }
 
-async function discoverFields(index: IndexId, baseQuery = "*", sortField = "span_start_timestamp_nanos"): Promise<DiscoveredField[]> {
+async function discoverFields(index: "traces" | "logs", baseQuery = "*", sortField = "span_start_timestamp_nanos"): Promise<DiscoveredField[]> {
   const fields: DiscoveredField[] = [];
 
   // 1) Top-level fields from index metadata
-  const meta = await getIndexMetadata(index);
+  const doGetMetadata = getMetadataFn(index);
+  const meta = await doGetMetadata();
   const mappings = meta?.index_config?.doc_mapping?.field_mappings;
   if (!Array.isArray(mappings)) return fields;
 
@@ -136,7 +150,8 @@ async function discoverFields(index: IndexId, baseQuery = "*", sortField = "span
   // 2) For JSON fields, sample docs to discover nested keys
   if (jsonFieldNames.length > 0) {
     try {
-      const res = await apiSearch<Record<string, unknown>>(index, {
+      const doSearch = getSearchFn(index);
+      const res = await doSearch<Record<string, unknown>>({
         query: baseQuery,
         max_hits: 100,
         sort_by: `-${sortField}`,

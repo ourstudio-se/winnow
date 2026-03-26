@@ -279,7 +279,7 @@ in
         traces = json.loads(machine.succeed(
             "curl -sf "
             "http://localhost:8080"
-            "/api/v1/winnow-traces-v0_1/search "
+            "/api/v1/traces/search "
             "-H 'Content-Type: application/json' "
             "-d '{\"query\": "
             "\"service_name:test-service "
@@ -296,7 +296,7 @@ in
         detail = json.loads(machine.succeed(
             "curl -sf "
             "http://localhost:8080"
-            "/api/v1/winnow-traces-v0_1/search "
+            "/api/v1/traces/search "
             "-H 'Content-Type: application/json' "
             f"-d '{{\"query\": "
             f"\"trace_id:{trace_id}\", "
@@ -311,7 +311,7 @@ in
         proxy_logs = json.loads(machine.succeed(
             "curl -sf "
             "http://localhost:8080"
-            "/api/v1/winnow-logs-v0_1/search "
+            "/api/v1/logs/search "
             "-H 'Content-Type: application/json' "
             "-d '{\"query\": "
             "\"service_name:test-service\", "
@@ -322,7 +322,7 @@ in
             f"got {proxy_logs['num_hits']}"
         )
 
-        # Verify unknown index is rejected (404)
+        # Verify unknown paths return 404
         result = machine.succeed(
             "curl -s -o /dev/null "
             "-w '%{http_code}' "
@@ -332,21 +332,19 @@ in
             "-d '{\"query\": \"*\"}'"
         )
         assert result.strip() == "404", (
-            f"Expected 404 for unknown index, "
+            f"Expected 404 for unknown path, "
             f"got {result.strip()}"
         )
 
-        # List available indexes (now returns object)
-        indexes = json.loads(machine.succeed(
+        # Verify traces metadata endpoint
+        meta = json.loads(machine.succeed(
             "curl -sf "
             "http://localhost:8080"
-            "/api/v1/indexes"
+            "/api/v1/traces/metadata"
         ))
-        assert indexes["traces"] == (
-            "winnow-traces-v0_1"
-        ), f"Expected traces index, got {indexes}"
-        assert indexes["logs"] == (
-            "winnow-logs-v0_1"
-        ), f"Expected logs index, got {indexes}"
+        assert "index_config" in meta, (
+            f"Expected index_config in metadata, "
+            f"got {meta}"
+        )
       '';
   }

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, Link } from "react-router";
 import { ListTree, ExternalLink, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
-import { search } from "@/lib/api";
-import { useIndexes } from "@/lib/index-context";
+import { searchLogs } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { TimeHistogram } from "@/components/time-histogram";
 import { serializeTimeParam } from "@/lib/time";
@@ -32,7 +31,6 @@ import { ResizeHandle } from "@/components/resize-handle";
 const PAGE_SIZE = 200;
 
 export function LogsView() {
-  const indexes = useIndexes();
   const [searchParams, setSearchParams] = useSearchParams();
   const [logs, setLogs] = useState<LogDocument[]>([]);
   const [numHits, setNumHits] = useState(0);
@@ -127,7 +125,7 @@ export function LogsView() {
       setLoading(true);
       setError(null);
       try {
-        const res = await search<LogDocument>(indexes.logs, {
+        const res = await searchLogs<LogDocument>({
           query: getBaseQuery(filters),
           max_hits: PAGE_SIZE,
           sort_by: buildSortBy(sortField, sortDir),
@@ -157,14 +155,14 @@ export function LogsView() {
         const cursorQuery = base === "*"
           ? `timestamp_nanos:<${lastTs}`
           : `${base} AND timestamp_nanos:<${lastTs}`;
-        res = await search<LogDocument>(indexes.logs, {
+        res = await searchLogs<LogDocument>({
           query: cursorQuery,
           max_hits: PAGE_SIZE,
           sort_by: "-timestamp_nanos",
         });
       } else {
         // Custom sort: use start_offset pagination
-        res = await search<LogDocument>(indexes.logs, {
+        res = await searchLogs<LogDocument>({
           query: getBaseQuery(),
           max_hits: PAGE_SIZE,
           sort_by: buildSortBy(sortField, sortDir),
@@ -273,17 +271,19 @@ export function LogsView() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <FilterBar
-        index={indexes.logs}
+        index="logs"
         timestampField="timestamp_nanos"
         onFilterChange={handleFilterChange}
         trailing={tracesLink}
       />
-      <TimeHistogram
-        index={indexes.logs}
-        timestampField="timestamp_nanos"
-        query={currentQuery}
-        onRangeSelect={handleHistogramRangeSelect}
-      />
+      {!loading && !error && logs.length > 0 && (
+        <TimeHistogram
+          index="logs"
+          timestampField="timestamp_nanos"
+          query={currentQuery}
+          onRangeSelect={handleHistogramRangeSelect}
+        />
+      )}
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           Loading logs...

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { search } from "@/lib/api";
-import type { IndexId } from "@/lib/api";
+import { searchTraces, searchLogs } from "@/lib/api";
 import {
   parseTimeParam,
   computeTimeRange,
@@ -14,7 +13,7 @@ interface Bucket {
 }
 
 interface TimeHistogramProps {
-  index: IndexId;
+  index: "traces" | "logs";
   timestampField?: string;
   query: string;
   onRangeSelect: (from: Date, to: Date) => void;
@@ -156,8 +155,9 @@ export function TimeHistogram({
     setIntervalMs(interval);
     setLoading(true);
 
+    const doSearch = index === "traces" ? searchTraces : searchLogs;
     let cancelled = false;
-    search<unknown>(index, {
+    doSearch<unknown>({
       query,
       max_hits: 0,
       aggs: {

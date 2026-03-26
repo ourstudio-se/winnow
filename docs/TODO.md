@@ -118,7 +118,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] `extractMetadataIndex` extractor + `handleIndexMetadata` handler in `api.zig`
 - [x] Unit tests for `extractMetadataIndex` (valid paths, edge cases)
 - [x] `getIndexMetadata()` client function in `frontend/src/lib/api.ts`
-- [ ] Verify: manual test with running Quickwit (`curl /api/v1/indexes/winnow-traces-v0_1`)
+- [x] Verify: manual test with running Quickwit (`curl /api/v1/traces/metadata`)
 
 ## KDL Config, Schema Validation, Retention, Dynamic Indexes
 
@@ -130,11 +130,11 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Rewire `main.zig` — new startup flow: parse CLI → load config → validate/create indexes
 - [x] Update `api.zig` — `IndexConfig` struct, `isAllowedIndex` helper, index list returns `{"traces":"...","logs":"..."}`
 - [x] Rename env vars: `OTEL_TRACES_INDEX`/`OTEL_LOGS_INDEX` → `WINNOW_TRACES_INDEX`/`WINNOW_LOGS_INDEX`
-- [x] Frontend: `IndexProvider` context, `useIndexes()` hook, all views use dynamic index names
+- [x] ~~Frontend: `IndexProvider` context, `useIndexes()` hook, all views use dynamic index names~~ (replaced by stable API endpoints)
 - [x] Update integration test — new index names, new index list response format
 - [ ] Verify: `zig build test` passes
 - [ ] Verify: `zig build run` with no config starts with default indexes
-- [ ] Verify: frontend loads and all views work with dynamic index names
+- [ ] Verify: frontend loads and all views work
 - [ ] Verify: `nix build` succeeds
 
 ## Configurable Serve Section (Collector/API Split)
@@ -152,6 +152,19 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [ ] Verify: `zig build run` with no config — backward compatible, everything on 8080
 - [ ] Verify: `zig build run` with serve block (collector-only) — only collector endpoints respond
 - [ ] Verify: `zig build run` with split ports — both components on respective ports
+
+## Stable API Endpoints (replace dynamic index routing)
+
+- [x] Rewrite `api.zig` — fixed routes `/api/v1/{traces,logs}/{search,metadata}`, remove `isAllowedIndex`, `extractSearchIndex`, `extractMetadataIndex`, `handleIndexList`
+- [x] Rewrite `api.ts` — `searchTraces()`, `searchLogs()`, `getTracesMetadata()`, `getLogsMetadata()`, remove `listIndexes`, `IndexMap`, `IndexId`
+- [x] Delete `index-context.tsx` — no more `IndexProvider` / `useIndexes()`
+- [x] Update `layout.tsx` — remove `IndexProvider` wrapper
+- [x] Update all frontend views — `service-map`, `traces`, `logs`, `trace-detail`, `operations-drilldown` use new API functions
+- [x] Update `filter-bar.tsx` and `time-histogram.tsx` — `index: "traces" | "logs"` prop, select right search/metadata function
+- [x] Update integration test — new API paths, replace old index-list/unknown-index tests with metadata test
+- [ ] Verify: `zig build test` passes
+- [ ] Verify: `pnpm build` succeeds with no TS errors
+- [ ] Verify: frontend loads instantly (no "Connecting..." spinner)
 
 ## Dev Tooling
 

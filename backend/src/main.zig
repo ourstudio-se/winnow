@@ -12,10 +12,7 @@ const ingest = @import("ingest.zig");
 const api = @import("api.zig");
 const static_assets = @import("static_assets.zig");
 
-const IndexConfig = struct {
-    traces: []const u8,
-    logs: []const u8,
-};
+const IndexConfig = api.IndexConfig;
 
 const ServerRole = struct {
     collector: bool,

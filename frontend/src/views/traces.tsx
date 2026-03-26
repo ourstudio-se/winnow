@@ -1,8 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router";
 import { AlertCircle, Map } from "lucide-react";
-import { search } from "@/lib/api";
-import { useIndexes } from "@/lib/index-context";
+import { searchTraces } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { TimeHistogram } from "@/components/time-histogram";
 import { serializeTimeParam } from "@/lib/time";
@@ -22,7 +21,6 @@ import { ResizeHandle } from "@/components/resize-handle";
 const PAGE_SIZE = 200;
 
 export function TracesView() {
-  const indexes = useIndexes();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [spans, setSpans] = useState<SpanDocument[]>([]);
@@ -83,7 +81,7 @@ export function TracesView() {
       setError(null);
       try {
         const query = getBaseQuery(filters);
-        const res = await search<SpanDocument>(indexes.traces, {
+        const res = await searchTraces<SpanDocument>({
           query,
           max_hits: PAGE_SIZE,
           sort_by: "-span_start_timestamp_nanos",
@@ -117,7 +115,7 @@ export function TracesView() {
 
     setLoadingMore(true);
     try {
-      const res = await search<SpanDocument>(indexes.traces, {
+      const res = await searchTraces<SpanDocument>({
         query: cursorQuery,
         max_hits: PAGE_SIZE,
         sort_by: "-span_start_timestamp_nanos",
@@ -178,16 +176,18 @@ export function TracesView() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <FilterBar
-        index={indexes.traces}
+        index="traces"
         onFilterChange={handleFilterChange}
         resolvedLabels={resolvedLabels}
         trailing={serviceMapLink}
       />
-      <TimeHistogram
-        index={indexes.traces}
-        query={currentQuery}
-        onRangeSelect={handleHistogramRangeSelect}
-      />
+      {!loading && !error && traces.length > 0 && (
+        <TimeHistogram
+          index="traces"
+          query={currentQuery}
+          onRangeSelect={handleHistogramRangeSelect}
+        />
+      )}
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           Loading traces...

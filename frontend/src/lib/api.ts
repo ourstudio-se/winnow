@@ -1,5 +1,3 @@
-export type IndexId = string;
-
 export interface FieldMapping {
   name: string;
   type: string;
@@ -42,11 +40,11 @@ class ApiError extends Error {
   }
 }
 
-export async function search<T>(
-  index: IndexId,
+async function searchIndex<T>(
+  category: "traces" | "logs",
   request: SearchRequest,
 ): Promise<SearchResponse<T>> {
-  const res = await fetch(`/api/v1/${index}/search`, {
+  const res = await fetch(`/api/v1/${category}/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
@@ -57,23 +55,32 @@ export async function search<T>(
   return res.json();
 }
 
-export interface IndexMap {
-  traces: string;
-  logs: string;
+export async function searchTraces<T>(
+  request: SearchRequest,
+): Promise<SearchResponse<T>> {
+  return searchIndex("traces", request);
 }
 
-export async function listIndexes(): Promise<IndexMap> {
-  const res = await fetch("/api/v1/indexes");
+export async function searchLogs<T>(
+  request: SearchRequest,
+): Promise<SearchResponse<T>> {
+  return searchIndex("logs", request);
+}
+
+async function getMetadata(
+  category: "traces" | "logs",
+): Promise<IndexMetadataResponse> {
+  const res = await fetch(`/api/v1/${category}/metadata`);
   if (!res.ok) {
     throw new ApiError(res.status, await res.text());
   }
   return res.json();
 }
 
-export async function getIndexMetadata(index: IndexId): Promise<IndexMetadataResponse> {
-  const res = await fetch(`/api/v1/indexes/${index}`);
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text());
-  }
-  return res.json();
+export async function getTracesMetadata(): Promise<IndexMetadataResponse> {
+  return getMetadata("traces");
+}
+
+export async function getLogsMetadata(): Promise<IndexMetadataResponse> {
+  return getMetadata("logs");
 }

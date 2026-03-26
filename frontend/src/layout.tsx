@@ -2,21 +2,18 @@ import { Outlet } from "react-router";
 import { Separator } from "@/components/ui/separator";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { SidebarPanelProvider, useSidebarPanel } from "@/lib/sidebar-context";
-import { IndexProvider } from "@/lib/index-context";
 
 export function Layout() {
   return (
-    <IndexProvider>
-      <SidebarPanelProvider>
-        <div className="flex h-screen">
-          <Sidebar />
-          {/* Main content */}
-          <main className="flex flex-1 flex-col overflow-hidden">
-            <Outlet />
-          </main>
-        </div>
-      </SidebarPanelProvider>
-    </IndexProvider>
+    <SidebarPanelProvider>
+      <div className="flex h-screen">
+        <Sidebar />
+        {/* Main content */}
+        <main className="flex flex-1 flex-col overflow-hidden">
+          <Outlet />
+        </main>
+      </div>
+    </SidebarPanelProvider>
   );
 }
 

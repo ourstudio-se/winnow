@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams, Link } from "react-router";
 import { ArrowLeft, AlertCircle, ChevronDown, ChevronRight, Map, ExternalLink, ListTree } from "lucide-react";
-import { search } from "@/lib/api";
-import { useIndexes } from "@/lib/index-context";
+import { searchTraces, searchLogs } from "@/lib/api";
 import {
   type SpanDocument,
   type SpanTreeNode,
@@ -224,7 +223,6 @@ function SpanEvents({
 }
 
 function SpanLogs({ spanId }: { spanId: string }) {
-  const indexes = useIndexes();
   const [open, setOpen] = useState(true);
   const [logs, setLogs] = useState<LogDocument[]>([]);
   const [loading, setLoading] = useState(true);
@@ -232,7 +230,7 @@ function SpanLogs({ spanId }: { spanId: string }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    search<LogDocument>(indexes.logs, {
+    searchLogs<LogDocument>({
       query: `span_id:${spanId}`,
       max_hits: 5,
       sort_by: "-timestamp_nanos",
@@ -379,7 +377,6 @@ function SpanDetailPanel({ span }: { span: SpanDocument }) {
 // --- Main view ---
 
 export function TraceDetailView() {
-  const indexes = useIndexes();
   const { traceId } = useParams<{ traceId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -398,7 +395,7 @@ export function TraceDetailView() {
     setLoading(true);
     setError(null);
     try {
-      const res = await search<SpanDocument>(indexes.traces, {
+      const res = await searchTraces<SpanDocument>({
         query: `trace_id:${traceId}`,
         max_hits: 1000,
       });
