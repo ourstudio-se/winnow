@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { X, AlertTriangle, CircleCheck, Loader2 } from "lucide-react";
 import { search } from "@/lib/api";
+import { useIndexes } from "@/lib/index-context";
 import { SPAN_KIND_SHORT, formatDuration } from "@/lib/traces";
 
 interface OperationsDrilldownProps {
@@ -76,6 +77,7 @@ export function OperationsDrilldownPanel({
   onClose,
   onToggleErrorsOnly,
 }: OperationsDrilldownProps) {
+  const indexes = useIndexes();
   const navigate = useNavigate();
   const [operations, setOperations] = useState<OperationRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,14 +94,14 @@ export function OperationsDrilldownPanel({
       const okQuery = `${base} AND NOT span_status.code:2`;
 
       // Always fetch errors; fetch OK only when not errorsOnly
-      const errorReq = search<DrilldownSpanDoc>("otel-traces-v0_9", {
+      const errorReq = search<DrilldownSpanDoc>(indexes.traces, {
         query: errorQuery,
         max_hits: 100,
         aggs: AGG_SHAPE,
       });
       const okReq = errorsOnly
         ? null
-        : search<DrilldownSpanDoc>("otel-traces-v0_9", {
+        : search<DrilldownSpanDoc>(indexes.traces, {
             query: okQuery,
             max_hits: 100,
             aggs: AGG_SHAPE,

@@ -29,6 +29,7 @@ import {
 } from "d3-force";
 import { Server, Database, Globe, Zap, AlertTriangle } from "lucide-react";
 import { search } from "@/lib/api";
+import { useIndexes } from "@/lib/index-context";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { ServiceContextMenu } from "@/components/service-context-menu";
 import { OperationsDrilldownPanel } from "@/components/operations-drilldown";
@@ -472,6 +473,7 @@ const edgeTypes = { service: ServiceEdge };
 // --- Main view ---
 
 export function ServiceMapView() {
+  const indexes = useIndexes();
   const [nodes, setNodes] = useState<Node<ServiceStats>[]>([]);
   const [edges, setEdges] = useState<Edge<ServiceEdgeData>[]>([]);
   const [loading, setLoading] = useState(true);
@@ -666,22 +668,22 @@ export function ServiceMapView() {
         const svcErrorQuery = userQuery ? `span_status.code:2 AND ${userQuery}` : "span_status.code:2";
 
         const [allRes, errorRes, svcAllRes, svcErrRes] = await Promise.all([
-          search<never>("otel-traces-v0_9", {
+          search<never>(indexes.traces, {
             query: baseQuery,
             max_hits: 0,
             aggs: nestedAggs,
           }),
-          search<never>("otel-traces-v0_9", {
+          search<never>(indexes.traces, {
             query: `${baseQuery} AND span_status.code:2`,
             max_hits: 0,
             aggs: nestedAggs,
           }),
-          search<never>("otel-traces-v0_9", {
+          search<never>(indexes.traces, {
             query: svcQuery,
             max_hits: 0,
             aggs: svcAggs,
           }),
-          search<never>("otel-traces-v0_9", {
+          search<never>(indexes.traces, {
             query: svcErrorQuery,
             max_hits: 0,
             aggs: { services: { terms: { field: "service_name", size: 200 } } },
@@ -716,7 +718,7 @@ export function ServiceMapView() {
         setLoading(false);
       }
     },
-    [startSimulation],
+    [startSimulation, indexes.traces],
   );
 
   const handleFilterChange = useCallback(
@@ -737,7 +739,7 @@ export function ServiceMapView() {
   return (
     <div className="flex flex-1 flex-col">
       <FilterBar
-        index="otel-traces-v0_9"
+        index={indexes.traces}
         baseQuery="(span_kind:3 OR span_kind:4)"
         onFilterChange={handleFilterChange}
       />

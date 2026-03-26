@@ -158,7 +158,7 @@ in
         def search(query):
             """Search traces index."""
             return search_index(
-                "otel-traces-v0_9", query
+                "winnow-traces-v0_1", query
             )
 
         def wait_for_hits_index(
@@ -181,7 +181,7 @@ in
         def wait_for_hits(query, min_hits, timeout=90):
             """Poll traces index for hits."""
             return wait_for_hits_index(
-                "otel-traces-v0_9",
+                "winnow-traces-v0_1",
                 query,
                 min_hits,
                 timeout,
@@ -260,7 +260,7 @@ in
 
         # Wait for logs to be ingested and committed
         logs = wait_for_hits_index(
-            "otel-logs-v0_9", "*", 1
+            "winnow-logs-v0_1", "*", 1
         )
         hits = logs["hits"]
         assert any(
@@ -279,7 +279,7 @@ in
         traces = json.loads(machine.succeed(
             "curl -sf "
             "http://localhost:8080"
-            "/api/v1/otel-traces-v0_9/search "
+            "/api/v1/winnow-traces-v0_1/search "
             "-H 'Content-Type: application/json' "
             "-d '{\"query\": "
             "\"service_name:test-service "
@@ -296,7 +296,7 @@ in
         detail = json.loads(machine.succeed(
             "curl -sf "
             "http://localhost:8080"
-            "/api/v1/otel-traces-v0_9/search "
+            "/api/v1/winnow-traces-v0_1/search "
             "-H 'Content-Type: application/json' "
             f"-d '{{\"query\": "
             f"\"trace_id:{trace_id}\", "
@@ -311,7 +311,7 @@ in
         proxy_logs = json.loads(machine.succeed(
             "curl -sf "
             "http://localhost:8080"
-            "/api/v1/otel-logs-v0_9/search "
+            "/api/v1/winnow-logs-v0_1/search "
             "-H 'Content-Type: application/json' "
             "-d '{\"query\": "
             "\"service_name:test-service\", "
@@ -336,14 +336,17 @@ in
             f"got {result.strip()}"
         )
 
-        # List available indexes
+        # List available indexes (now returns object)
         indexes = json.loads(machine.succeed(
             "curl -sf "
             "http://localhost:8080"
             "/api/v1/indexes"
         ))
-        assert "otel-traces-v0_9" in indexes
-        assert "otel-logs-v0_9" in indexes
-        assert "servicegraph" not in indexes
+        assert indexes["traces"] == (
+            "winnow-traces-v0_1"
+        ), f"Expected traces index, got {indexes}"
+        assert indexes["logs"] == (
+            "winnow-logs-v0_1"
+        ), f"Expected logs index, got {indexes}"
       '';
   }

@@ -6,7 +6,11 @@
             .url = "git+https://github.com/Arwalk/zig-protobuf?ref=v4.0.0#622e9e84f6df66758718b1196e1ccd6dd45a8930",
             .hash = "protobuf-3.0.0-0e82avQuKADcHgDzDixSMGN22hzGEgwFE0tEJUWnWu5Q",
         },
+        .kdl = .{
+            .url = "https://github.com/AnimeCatGirlIndustries/kdl-zig/archive/v0.0.4.tar.gz",
+            .hash = "kdl-0.0.4-kuYJRYQtBwDr5JGUWKq0THB5AYPGyQ4B6vW55ZqnDBJ2",
+        },
     },
     .paths = .{""},
-    .fingerprint = 0x6d1c55d6d8a04579,
+    .fingerprint = 0x86737c0b3856354f,
 }

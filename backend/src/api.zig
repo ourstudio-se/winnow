@@ -8,12 +8,21 @@ const log = std.log.scoped(.api);
 
 const max_body_size: Io.Limit = .limited(1024 * 1024); // 1 MiB
 
+pub const IndexConfig = struct {
+    traces: []const u8,
+    logs: []const u8,
+};
+
+fn isAllowedIndex(indexes: *const IndexConfig, id: []const u8) bool {
+    return std.mem.eql(u8, indexes.traces, id) or std.mem.eql(u8, indexes.logs, id);
+}
+
 /// Handle all /api/ routes. Dispatches to search proxy or index list.
 pub fn handleApi(
     request: *http.Server.Request,
     arena: Allocator,
     qw: Quickwit,
-    allowed_indexes: []const []const u8,
+    indexes: *const IndexConfig,
 ) !void {
     const target = request.head.target;
 
@@ -22,7 +31,7 @@ pub fn handleApi(
         if (request.head.method != .GET) {
             return respondError(request, .method_not_allowed, "method not allowed");
         }
-        return handleIndexList(request, arena, allowed_indexes);
+        return handleIndexList(request, indexes);
     }
 
     // GET /api/v1/indexes/{index}
@@ -30,7 +39,7 @@ pub fn handleApi(
         if (request.head.method != .GET) {
             return respondError(request, .method_not_allowed, "method not allowed");
         }
-        return handleIndexMetadata(request, arena, qw, allowed_indexes, index_id);
+        return handleIndexMetadata(request, arena, qw, indexes, index_id);
     }
 
     // POST /api/v1/{index}/search
@@ -38,7 +47,7 @@ pub fn handleApi(
         if (request.head.method != .POST) {
             return respondError(request, .method_not_allowed, "method not allowed");
         }
-        return handleSearch(request, arena, qw, allowed_indexes, index_id);
+        return handleSearch(request, arena, qw, indexes, index_id);
     }
 
     return respondError(request, .not_found, "not found");
@@ -61,14 +70,10 @@ fn handleIndexMetadata(
     request: *http.Server.Request,
     arena: Allocator,
     qw: Quickwit,
-    allowed_indexes: []const []const u8,
+    indexes: *const IndexConfig,
     index_id: []const u8,
 ) !void {
-    const allowed = for (allowed_indexes) |idx| {
-        if (std.mem.eql(u8, idx, index_id)) break true;
-    } else false;
-
-    if (!allowed) {
+    if (!isAllowedIndex(indexes, index_id)) {
         return respondError(request, .not_found, "index not found");
     }
 
@@ -109,15 +114,10 @@ fn handleSearch(
     request: *http.Server.Request,
     arena: Allocator,
     qw: Quickwit,
-    allowed_indexes: []const []const u8,
+    indexes: *const IndexConfig,
     index_id: []const u8,
 ) !void {
-    // Validate index is in allowed list
-    const allowed = for (allowed_indexes) |idx| {
-        if (std.mem.eql(u8, idx, index_id)) break true;
-    } else false;
-
-    if (!allowed) {
+    if (!isAllowedIndex(indexes, index_id)) {
         return respondError(request, .not_found, "index not found");
     }
 
@@ -150,21 +150,13 @@ fn handleSearch(
 
 fn handleIndexList(
     request: *http.Server.Request,
-    arena: Allocator,
-    allowed_indexes: []const []const u8,
+    indexes: *const IndexConfig,
 ) !void {
-    // Build JSON array: ["index1", "index2", ...]
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    const writer = &buf.writer;
-    try writer.writeByte('[');
-    for (allowed_indexes, 0..) |idx, i| {
-        if (i > 0) try writer.writeByte(',');
-        try writer.writeByte('"');
-        try writer.writeAll(idx);
-        try writer.writeByte('"');
-    }
-    try writer.writeByte(']');
-    return respondJson(request, buf.writer.buffer[0..buf.writer.end]);
+    // Build JSON object: {"traces":"...","logs":"..."}
+    var buf: [512]u8 = undefined;
+    const body = std.fmt.bufPrint(&buf, "{{\"traces\":\"{s}\",\"logs\":\"{s}\"}}", .{ indexes.traces, indexes.logs }) catch
+        "{\"error\":\"internal error\"}";
+    return respondJson(request, body);
 }
 
 fn respondJson(request: *http.Server.Request, body: []const u8) !void {
@@ -192,12 +184,12 @@ fn respondError(request: *http.Server.Request, status: http.Status, msg: []const
 
 test "extractMetadataIndex valid paths" {
     try std.testing.expectEqualStrings(
-        "otel-traces-v0_9",
-        extractMetadataIndex("/api/v1/indexes/otel-traces-v0_9").?,
+        "winnow-traces-v0_1",
+        extractMetadataIndex("/api/v1/indexes/winnow-traces-v0_1").?,
     );
     try std.testing.expectEqualStrings(
-        "otel-logs-v0_9",
-        extractMetadataIndex("/api/v1/indexes/otel-logs-v0_9").?,
+        "winnow-logs-v0_1",
+        extractMetadataIndex("/api/v1/indexes/winnow-logs-v0_1").?,
     );
 }
 
@@ -210,12 +202,12 @@ test "extractMetadataIndex invalid paths" {
 
 test "extractSearchIndex valid paths" {
     try std.testing.expectEqualStrings(
-        "otel-traces-v0_9",
-        extractSearchIndex("/api/v1/otel-traces-v0_9/search").?,
+        "winnow-traces-v0_1",
+        extractSearchIndex("/api/v1/winnow-traces-v0_1/search").?,
     );
     try std.testing.expectEqualStrings(
-        "otel-logs-v0_9",
-        extractSearchIndex("/api/v1/otel-logs-v0_9/search").?,
+        "winnow-logs-v0_1",
+        extractSearchIndex("/api/v1/winnow-logs-v0_1/search").?,
     );
     try std.testing.expectEqualStrings(
         "my-custom-index",
@@ -230,20 +222,14 @@ test "extractSearchIndex invalid paths" {
     try std.testing.expectEqual(null, extractSearchIndex("/api/v1/foo/notearch"));
 }
 
-test "allowed index validation" {
-    const allowed = &[_][]const u8{ "otel-traces-v0_9", "otel-logs-v0_9" };
+test "isAllowedIndex" {
+    const indexes = IndexConfig{
+        .traces = "winnow-traces-v0_1",
+        .logs = "winnow-logs-v0_1",
+    };
 
-    // Known indexes should be accepted
-    for (allowed) |idx| {
-        const found = for (allowed) |a| {
-            if (std.mem.eql(u8, a, idx)) break true;
-        } else false;
-        try std.testing.expect(found);
-    }
-
-    // Unknown index should be rejected
-    const found = for (allowed) |a| {
-        if (std.mem.eql(u8, a, "secret-index")) break true;
-    } else false;
-    try std.testing.expect(!found);
+    try std.testing.expect(isAllowedIndex(&indexes, "winnow-traces-v0_1"));
+    try std.testing.expect(isAllowedIndex(&indexes, "winnow-logs-v0_1"));
+    try std.testing.expect(!isAllowedIndex(&indexes, "secret-index"));
+    try std.testing.expect(!isAllowedIndex(&indexes, "otel-traces-v0_9"));
 }

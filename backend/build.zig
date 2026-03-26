@@ -50,6 +50,12 @@ pub fn build(b: *std.Build) void {
 
     gen_proto.dependOn(&zig_fmt.step);
 
+    // --- KDL dependency ---
+    const kdl_dep = b.dependency("kdl", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     // --- Main executable ---
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -57,6 +63,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
+    exe_mod.addImport("kdl", kdl_dep.module("kdl"));
 
     const exe = b.addExecutable(.{ .name = "winnow", .root_module = exe_mod });
 
@@ -78,6 +85,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
+    test_mod.addImport("kdl", kdl_dep.module("kdl"));
 
     const unit_tests = b.addTest(.{ .root_module = test_mod });
 

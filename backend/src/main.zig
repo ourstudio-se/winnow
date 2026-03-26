@@ -7,6 +7,7 @@ const logs_otlp = @import("proto/opentelemetry/proto/collector/logs/v1.pb.zig");
 const Quickwit = @import("quickwit.zig").Quickwit;
 const otel_index = @import("otel_index.zig");
 const otel_logs_index = @import("otel_logs_index.zig");
+const index_schema = @import("index_schema.zig");
 const ingest = @import("ingest.zig");
 const api = @import("api.zig");
 const static_assets = @import("static_assets.zig");
@@ -20,53 +21,101 @@ const Context = struct {
     qw: Quickwit,
     allocator: Allocator,
     indexes: IndexConfig,
-    allowed_indexes: [2][]const u8,
 };
 
-const default_quickwit_url = "http://localhost:7280";
+const config_mod = @import("config.zig");
+const schema_validation = @import("schema_validation.zig");
+
+fn ensureOrValidateIndex(
+    arena: Allocator,
+    qw: Quickwit,
+    index_id: []const u8,
+    schema: index_schema.IndexSchema,
+    retention: ?[]const u8,
+) !void {
+    if (qw.indexExists(arena, index_id) catch |err| {
+        std.log.err("failed to check index '{s}': {}", .{ index_id, err });
+        return err;
+    }) {
+        std.log.info("index '{s}' already exists, validating schema", .{index_id});
+
+        const result = qw.getIndexMetadata(arena, index_id) catch |err| {
+            std.log.err("failed to get metadata for '{s}': {}", .{ index_id, err });
+            return err;
+        };
+
+        if (result.status != .ok) {
+            std.log.err("unexpected status {d} fetching metadata for '{s}'", .{ @intFromEnum(result.status), index_id });
+            return error.UnexpectedStatus;
+        }
+
+        const mismatches = schema_validation.validateSchema(arena, schema.field_mappings, result.body) catch |err| {
+            std.log.err("schema validation failed for '{s}': {}", .{ index_id, err });
+            return err;
+        };
+
+        if (mismatches.len > 0) {
+            std.log.err("schema mismatch for index '{s}':", .{index_id});
+            for (mismatches) |m| {
+                switch (m) {
+                    .missing_field => |name| std.log.err("  missing field: {s}", .{name}),
+                    .type_mismatch => |info| std.log.err("  field '{s}': expected type '{s}', got '{s}'", .{ info.field, info.expected, info.actual }),
+                    .tokenizer_mismatch => |info| std.log.err("  field '{s}': expected tokenizer '{s}', got '{s}'", .{ info.field, info.expected, info.actual }),
+                }
+            }
+            return error.SchemaMismatch;
+        }
+
+        // Check retention (warn only)
+        if (schema_validation.checkRetention(arena, retention, result.body) catch null) |ret_mismatch| {
+            std.log.warn("retention mismatch for '{s}': configured '{s}', actual '{s}'", .{
+                index_id,
+                ret_mismatch.expected orelse "(none)",
+                ret_mismatch.actual orelse "(none)",
+            });
+        }
+    } else {
+        std.log.info("creating index '{s}'", .{index_id});
+        const config_json = try index_schema.buildIndexConfig(arena, index_id, schema, retention);
+        qw.createIndex(arena, config_json) catch |err| {
+            std.log.err("failed to create index '{s}': {}", .{ index_id, err });
+            return err;
+        };
+    }
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize Quickwit client
-    const quickwit_url = std.process.getEnvVarOwned(allocator, "QUICKWIT_URL") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => try allocator.dupe(u8, default_quickwit_url),
-        else => return err,
+    // Parse CLI args and load config
+    const cli = config_mod.parseCli(allocator) catch {
+        return;
     };
-    defer allocator.free(quickwit_url);
+    defer if (cli.config_path) |p| allocator.free(p);
 
-    // Read configurable index names
-    const traces_index = std.process.getEnvVarOwned(allocator, "OTEL_TRACES_INDEX") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => try allocator.dupe(u8, otel_index.index_id),
-        else => return err,
+    const cfg = config_mod.load(allocator, cli.config_path, cli.explicit) catch |err| {
+        std.log.err("failed to load config: {}", .{err});
+        return err;
     };
-    defer allocator.free(traces_index);
-
-    const logs_index = std.process.getEnvVarOwned(allocator, "OTEL_LOGS_INDEX") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => try allocator.dupe(u8, otel_logs_index.index_id),
-        else => return err,
-    };
-    defer allocator.free(logs_index);
+    defer cfg.deinit(allocator);
 
     var http_client: http.Client = .{ .allocator = allocator };
     defer http_client.deinit();
 
-    const qw = Quickwit.init(&http_client, quickwit_url);
+    const qw = Quickwit.init(&http_client, cfg.quickwit_url);
 
-    std.log.info("connecting to Quickwit at {s}", .{quickwit_url});
+    std.log.info("connecting to Quickwit at {s}", .{cfg.quickwit_url});
     {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        qw.ensureIndex(arena.allocator(), traces_index, otel_index.config) catch |err| {
-            std.log.err("failed to ensure traces index: {}", .{err});
-            return err;
-        };
-        qw.ensureIndex(arena.allocator(), logs_index, otel_logs_index.config) catch |err| {
-            std.log.err("failed to ensure logs index: {}", .{err});
-            return err;
-        };
+
+        // Traces index
+        try ensureOrValidateIndex(arena.allocator(), qw, cfg.traces.index_id, otel_index.schema, cfg.traces.retention);
+
+        // Logs index
+        try ensureOrValidateIndex(arena.allocator(), qw, cfg.logs.index_id, otel_logs_index.schema, cfg.logs.retention);
     }
 
     // Start HTTP server
@@ -82,10 +131,9 @@ pub fn main() !void {
         .qw = qw,
         .allocator = allocator,
         .indexes = .{
-            .traces = traces_index,
-            .logs = logs_index,
+            .traces = cfg.traces.index_id,
+            .logs = cfg.logs.index_id,
         },
-        .allowed_indexes = .{ traces_index, logs_index },
     };
 
     while (true) {
@@ -143,7 +191,7 @@ fn handleConnection(conn: net.Server.Connection, ctx: *const Context) void {
             }) catch {};
         }
     } else if (std.mem.startsWith(u8, request.head.target, "/api/")) {
-        api.handleApi(&request, arena.allocator(), ctx.qw, &ctx.allowed_indexes) catch |err| {
+        api.handleApi(&request, arena.allocator(), ctx.qw, &ctx.indexes) catch |err| {
             std.log.err("api error: {}", .{err});
         };
     } else {
@@ -215,6 +263,9 @@ test {
     _ = Quickwit;
     _ = otel_index;
     _ = otel_logs_index;
+    _ = index_schema;
+    _ = config_mod;
+    _ = schema_validation;
     _ = ingest;
     _ = api;
 }

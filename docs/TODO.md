@@ -118,7 +118,24 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] `extractMetadataIndex` extractor + `handleIndexMetadata` handler in `api.zig`
 - [x] Unit tests for `extractMetadataIndex` (valid paths, edge cases)
 - [x] `getIndexMetadata()` client function in `frontend/src/lib/api.ts`
-- [ ] Verify: manual test with running Quickwit (`curl /api/v1/indexes/otel-traces-v0_9`)
+- [ ] Verify: manual test with running Quickwit (`curl /api/v1/indexes/winnow-traces-v0_1`)
+
+## KDL Config, Schema Validation, Retention, Dynamic Indexes
+
+- [x] Add kdl-zig dependency (`build.zig.zon`, `build.zig`, nix lock)
+- [x] Create `index_schema.zig` — shared `FieldMapping` type + `buildIndexConfig` JSON builder
+- [x] Restructure `otel_index.zig` and `otel_logs_index.zig` — structured field data instead of raw JSON strings
+- [x] Create `config.zig` — KDL config parsing, env var override, CLI `--config` flag, defaults (`winnow-traces-v0_1`, `winnow-logs-v0_1`)
+- [x] Create `schema_validation.zig` — `validateSchema` (field type/tokenizer checks), `checkRetention` (warn on mismatch)
+- [x] Rewire `main.zig` — new startup flow: parse CLI → load config → validate/create indexes
+- [x] Update `api.zig` — `IndexConfig` struct, `isAllowedIndex` helper, index list returns `{"traces":"...","logs":"..."}`
+- [x] Rename env vars: `OTEL_TRACES_INDEX`/`OTEL_LOGS_INDEX` → `WINNOW_TRACES_INDEX`/`WINNOW_LOGS_INDEX`
+- [x] Frontend: `IndexProvider` context, `useIndexes()` hook, all views use dynamic index names
+- [x] Update integration test — new index names, new index list response format
+- [ ] Verify: `zig build test` passes
+- [ ] Verify: `zig build run` with no config starts with default indexes
+- [ ] Verify: frontend loads and all views work with dynamic index names
+- [ ] Verify: `nix build` succeeds
 
 ## Dev Tooling
 

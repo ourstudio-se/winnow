@@ -1,4 +1,4 @@
-export type IndexId = "otel-traces-v0_9" | "otel-logs-v0_9";
+export type IndexId = string;
 
 export interface FieldMapping {
   name: string;
@@ -57,7 +57,12 @@ export async function search<T>(
   return res.json();
 }
 
-export async function listIndexes(): Promise<IndexId[]> {
+export interface IndexMap {
+  traces: string;
+  logs: string;
+}
+
+export async function listIndexes(): Promise<IndexMap> {
   const res = await fetch("/api/v1/indexes");
   if (!res.ok) {
     throw new ApiError(res.status, await res.text());
