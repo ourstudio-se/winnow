@@ -78,6 +78,14 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the server");
     run_step.dependOn(&run_cmd.step);
 
+    // ~~~ ZLS stuff ~~~
+    const exe_check = b.addExecutable(.{
+        .name = "winnow",
+        .root_module = exe_mod,
+    });
+    const check = b.step("check", "Check if the program compiles");
+    check.dependOn(&exe_check.step);
+
     // --- Tests ---
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),

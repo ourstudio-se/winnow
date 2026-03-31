@@ -14,16 +14,17 @@ const static_assets = @import("static_assets.zig");
 
 const IndexConfig = api.IndexConfig;
 
-const ServerRole = struct {
-    collector: bool,
-    api: bool,
+const ServerRoles = packed struct {
+    api: bool = false,
+    collector: bool = false,
 };
 
 const Context = struct {
     qw: Quickwit,
     allocator: Allocator,
     indexes: IndexConfig,
-    role: ServerRole,
+    roles: ServerRoles,
+    port: u16,
 };
 
 const config_mod = @import("config.zig");
@@ -107,10 +108,18 @@ pub fn main() !void {
     var http_client: http.Client = .{ .allocator = allocator };
     defer http_client.deinit();
 
-    const qw = Quickwit.init(&http_client, cfg.quickwit_url);
+    // Determine serving topology from config
+    const serve = cfg.serve;
+    if (serve.collector == null and serve.api == null) {
+        std.log.err("no serve components enabled", .{});
+        return error.NoComponentsEnabled;
+    }
 
     std.log.info("connecting to Quickwit at {s}", .{cfg.quickwit_url});
-    {
+    const qw = Quickwit.init(&http_client, cfg.quickwit_url);
+
+    // Only validate indices when non-static services are served
+    if (serve.collector != null or serve.api != null) {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
 
@@ -121,96 +130,94 @@ pub fn main() !void {
         try ensureOrValidateIndex(arena.allocator(), qw, cfg.logs.index_id, otel_logs_index.schema, cfg.logs.retention);
     }
 
-    // Determine serving topology from config
-    const serve = cfg.serve;
-    if (serve.collector == null and serve.api == null) {
-        std.log.err("no serve components enabled", .{});
-        return error.NoComponentsEnabled;
-    }
-
-    const collector_port: ?u16 = if (serve.collector) |c| c.port else null;
-    const api_port: ?u16 = if (serve.api) |a| a.port else null;
+    const api_port = cfg.ports.api.http;
+    const collector_port = cfg.ports.collector.http;
 
     const indexes = IndexConfig{
         .traces = cfg.traces.index_id,
         .logs = cfg.logs.index_id,
     };
 
-    // Determine if we need one or two servers
-    const same_port = if (collector_port != null and api_port != null)
-        collector_port.? == api_port.?
-    else
-        false;
+    var contextsByPort = std.hash_map.AutoHashMap(u16, Context).init(allocator);
+    defer contextsByPort.deinit();
 
-    if (same_port) {
-        // Single server with both roles
-        const port = collector_port.?;
-        const address = net.Address.parseIp("0.0.0.0", port) catch unreachable;
-        var server = try address.listen(.{ .reuse_address = true });
-        defer server.deinit();
-
-        std.log.info("collector + api listening on http://0.0.0.0:{d}", .{port});
-
-        const ctx = Context{
-            .qw = qw,
-            .allocator = allocator,
-            .indexes = indexes,
-            .role = .{ .collector = true, .api = true },
-        };
-
-        acceptLoop(&server, &ctx);
-    } else {
-        // Two separate servers (or one with a single role)
-        var server1: ?net.Server = null;
-        defer if (server1) |*s| s.deinit();
-        var server2: ?net.Server = null;
-        defer if (server2) |*s| s.deinit();
-
-        var ctx1: Context = undefined;
-        var ctx2: Context = undefined;
-
-        var thread1: ?std.Thread = null;
-
-        if (collector_port) |port| {
-            const address = net.Address.parseIp("0.0.0.0", port) catch unreachable;
-            server1 = try address.listen(.{ .reuse_address = true });
-            ctx1 = Context{
+    if (serve.api != null) {
+        if (contextsByPort.getPtr(api_port)) |context| {
+            context.roles.api = true;
+        } else {
+            try contextsByPort.put(api_port, Context{
                 .qw = qw,
                 .allocator = allocator,
                 .indexes = indexes,
-                .role = .{ .collector = true, .api = false },
-            };
-            std.log.info("collector listening on http://0.0.0.0:{d}", .{port});
+                .roles = .{ .api = true },
+                .port = api_port,
+            });
         }
-
-        if (api_port) |port| {
-            const address = net.Address.parseIp("0.0.0.0", port) catch unreachable;
-            server2 = try address.listen(.{ .reuse_address = true });
-            ctx2 = Context{
-                .qw = qw,
-                .allocator = allocator,
-                .indexes = indexes,
-                .role = .{ .collector = false, .api = true },
-            };
-            std.log.info("api listening on http://0.0.0.0:{d}", .{port});
-        }
-
-        // Start the first server in a background thread (if it exists),
-        // run the second on the main thread
-        if (server1 != null and server2 != null) {
-            thread1 = std.Thread.spawn(.{}, acceptLoop, .{ &server1.?, &ctx1 }) catch |err| {
-                std.log.err("failed to spawn server thread: {}", .{err});
-                return err;
-            };
-            acceptLoop(&server2.?, &ctx2);
-        } else if (server1) |*s| {
-            acceptLoop(s, &ctx1);
-        } else if (server2) |*s| {
-            acceptLoop(s, &ctx2);
-        }
-
-        if (thread1) |t| t.join();
     }
+
+    if (serve.collector != null) {
+        if (contextsByPort.getPtr(collector_port)) |context| {
+            context.roles.collector = true;
+        } else {
+            try contextsByPort.put(collector_port, Context{
+                .qw = qw,
+                .allocator = allocator,
+                .indexes = indexes,
+                .roles = .{ .collector = true },
+                .port = collector_port,
+            });
+        }
+    }
+
+    var wg = std.Thread.WaitGroup{};
+
+    var ctxIterator = contextsByPort.iterator();
+
+    var servers: [3]net.Server = undefined;
+    var serversCount: usize = 0;
+
+    defer {
+        for (0..serversCount) |i| {
+            servers[i].deinit();
+        }
+    }
+
+    while (ctxIterator.next()) |entry| {
+        const port: u16 = entry.key_ptr.*;
+        const ctx = entry.value_ptr;
+        const address = net.Address.parseIp("0.0.0.0", port) catch unreachable;
+
+        servers[serversCount] = try address.listen(.{ .reuse_address = true });
+
+        const serverPtr = &servers[serversCount];
+
+        serversCount += 1;
+
+        var roleAl = try std.ArrayList(u8).initCapacity(allocator, 255);
+        defer roleAl.deinit(allocator);
+
+        if (ctx.roles.api) {
+            try roleAl.appendSlice(allocator, "api");
+        }
+
+        if (ctx.roles.collector) {
+            if (roleAl.items.len > 0) {
+                try roleAl.appendSlice(allocator, " + ");
+            }
+            try roleAl.appendSlice(allocator, "collector");
+        }
+
+        const rolestr = try roleAl.toOwnedSlice(allocator);
+        defer allocator.free(rolestr);
+
+        std.log.info("{s} listening on http://0.0.0.0:{d}", .{ rolestr, port });
+
+        wg.spawnManager(acceptLoop, .{ serverPtr, ctx });
+    }
+
+    wg.wait();
+
+    std.log.info("closing server", .{});
 }
 
 fn acceptLoop(server: *net.Server, ctx: *const Context) void {
@@ -244,8 +251,10 @@ fn handleConnection(conn: net.Server.Connection, ctx: *const Context) void {
     var arena = std.heap.ArenaAllocator.init(ctx.allocator);
     defer arena.deinit();
 
+    std.log.debug("request received - {s}, ctx: {}", .{ request.head.target, ctx.roles });
+
     // Route (gated by server role)
-    const role = ctx.role;
+    const role = ctx.roles;
     if (std.mem.eql(u8, request.head.target, "/v1/traces")) {
         if (!role.collector) return sendNotFound(&request);
         if (request.head.method == .POST) {

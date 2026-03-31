@@ -9,13 +9,26 @@ pub const IndexSettings = struct {
     retention: ?[]const u8 = null,
 };
 
-pub const Listener = struct {
-    port: u16 = 8080,
-};
+pub const ServeCollectorConfig = struct {};
+pub const ServeFrontendConfig = struct {};
+pub const ServeApiConfig = struct {};
 
 pub const ServeConfig = struct {
-    collector: ?Listener = .{},
-    api: ?Listener = .{},
+    collector: ?ServeCollectorConfig = .{},
+    api: ?ServeApiConfig = .{},
+};
+
+pub const PortsCollectorConfig = struct {
+    http: u16 = 4318,
+};
+
+pub const PortsApiConfig = struct {
+    http: u16 = 8080,
+};
+
+pub const PortsConfig = struct {
+    collector: PortsCollectorConfig = .{},
+    api: PortsApiConfig = .{},
 };
 
 pub const Config = struct {
@@ -23,6 +36,7 @@ pub const Config = struct {
     traces: IndexSettings,
     logs: IndexSettings,
     serve: ServeConfig = .{},
+    ports: PortsConfig = .{},
     /// Tracks which strings were heap-allocated (need freeing).
     owned: OwnedStrings = .{},
 
@@ -182,30 +196,55 @@ fn parseKdl(allocator: Allocator, source: []const u8, base: Config) !Config {
             }
         } else if (std.mem.eql(u8, name, "serve")) {
             // Start with both disabled; only listed children are enabled
-            cfg.serve = .{ .collector = null, .api = null };
+            cfg.serve = .{
+                .api = null,
+                .collector = null,
+            };
             var has_children = false;
 
             var child_iter = doc.childIterator(node);
             while (child_iter.next()) |child| {
-                const child_name = doc.getString(doc.nodes.getName(child));
-                const port: u16 = if (getIntProp(&doc, child, "port")) |p|
-                    std.math.cast(u16, p) orelse return error.ConfigParseError
-                else
-                    8080;
+                const child_name = std.meta.stringToEnum(enum {
+                    api,
+                    collector,
+                }, doc.getString(doc.nodes.getName(child))) orelse return error.ConfigParseError;
 
-                if (std.mem.eql(u8, child_name, "collector")) {
-                    cfg.serve.collector = .{ .port = port };
-                    has_children = true;
-                } else if (std.mem.eql(u8, child_name, "api")) {
-                    cfg.serve.api = .{ .port = port };
-                    has_children = true;
-                } else {
-                    return error.ConfigParseError;
+                has_children = true;
+
+                switch (child_name) {
+                    .api => {
+                        cfg.serve.api = .{};
+                    },
+                    .collector => {
+                        cfg.serve.collector = .{};
+                    },
                 }
             }
 
             if (!has_children) {
                 return error.ConfigParseError;
+            }
+        } else if (std.mem.eql(u8, name, "ports")) {
+            var child_iter = doc.childIterator(node);
+            while (child_iter.next()) |child| {
+                const child_name = std.meta.stringToEnum(enum {
+                    api,
+                    collector,
+                }, doc.getString(doc.nodes.getName(child))) orelse return error.ConfigParseError;
+
+                const port: u16 = if (getIntProp(&doc, child, "http")) |p|
+                    std.math.cast(u16, p) orelse return error.ConfigParseError
+                else
+                    continue;
+
+                switch (child_name) {
+                    .api => {
+                        cfg.ports.api.http = port;
+                    },
+                    .collector => {
+                        cfg.ports.collector.http = port;
+                    },
+                }
             }
         }
     }
