@@ -182,6 +182,25 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Verify: service map shows edges from parent-child joins (not just peer.service)
 - [x] Verify: implicit leaf nodes (databases, caches) appear via attribute inference
 
+## Messaging Edges, Topic Nodes, and Implicit Node Styling
+
+- [x] Add `edgeType` field (`"sync"` / `"async"`) to `AggregatedEdge` and `ServiceEdgeData`
+- [x] Add `"messaging"` to `ServiceKind` type with regex pattern for kafka/rabbitmq/etc.
+- [x] Add `inferMessagingTopic` and `inferMessagingSystem` attribute helpers
+- [x] Update `deriveEdgesFromTraces` — PRODUCER→CONSUMER pairs create intermediary topic node (e.g. `kafka/orders`) with two async edges
+- [x] Implicit nodes (databases, caches, messaging topics) render smaller (`h-14 w-14`) with dashed borders
+- [x] Async edges render with dashed stroke and flowing animation
+- [x] Add `Inbox` icon for messaging service kind
+- [x] Add messaging PRODUCER/CONSUMER spans to `generate-data.py` (order-service → kafka/orders → notification-service)
+- [ ] Verify: `pnpm build` succeeds with no TS errors
+- [x] Robust span_kind detection: child=CONSUMER (kind=5) triggers async even if parent isn't PRODUCER
+- [x] Broad attribute matching: OTel semconv + bare `kafka.topic` / `rabbitmq.*` / `nats.*` keys + generic `messaging.*` scan
+- [x] Messaging topic display: strip system prefix from label, show full name on hover
+- [x] "Show traces" on topic nodes: queries PRODUCER/CONSUMER spans by topic attribute (not peer.service)
+- [x] Async bridge in trace waterfall: animated dashed bar shows gap between PRODUCER end and CONSUMER start
+- [ ] Verify: service map shows dashed animated edges for messaging, solid for sync
+- [ ] Verify: implicit nodes (postgres, redis, kafka/orders) render with dashed borders
+
 ## Dev Tooling
 
 - [x] `docker-compose.yml` — Quickwit v0.9.0-rc with persistent volume (ports 7290/7291)

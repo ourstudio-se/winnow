@@ -120,6 +120,14 @@
     --sidebar-ring: hsl(0, 80%, 42%);
 }
 
+@keyframes dash-flow {
+  to { stroke-dashoffset: -9; }
+}
+
+@keyframes dash-flow-bg {
+  to { background-position: 8px 0; }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

@@ -26,7 +26,7 @@ import {
   type SimulationLinkDatum,
   type Simulation,
 } from "d3-force";
-import { Server, Database, Globe, Zap, AlertTriangle } from "lucide-react";
+import { Server, Database, Globe, Zap, Inbox, AlertTriangle } from "lucide-react";
 import { searchTraces } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { ServiceContextMenu } from "@/components/service-context-menu";
@@ -56,6 +56,7 @@ import {
 const serviceKindIcon: Record<ServiceKind, typeof Server> = {
   database: Database,
   cache: Zap,
+  messaging: Inbox,
   gateway: Globe,
   service: Server,
 };
@@ -104,6 +105,7 @@ function buildGraph(
       callCount: e.callCount,
       errorCount: e.errorCount,
       avgDurationMs: e.avgDurationMs,
+      edgeType: e.edgeType,
     },
   }));
 
@@ -114,6 +116,7 @@ function buildGraph(
 
 function ServiceNode({ data }: NodeProps<Node<ServiceStats>>) {
   const Icon = serviceKindIcon[data.serviceKind];
+
   const errorPct =
     data.errorRate > 0 ? `${(data.errorRate * 100).toFixed(0)}%` : null;
 
@@ -121,6 +124,13 @@ function ServiceNode({ data }: NodeProps<Node<ServiceStats>>) {
   let borderColor = "border-emerald-500";
   if (data.errorRate >= 0.15) borderColor = "border-red-500";
   else if (data.errorRate >= 0.05) borderColor = "border-amber-500";
+
+  const isImplicit = data.isImplicit;
+
+  // Messaging topic nodes: display "holder.changes.v1" not "kafka/holder.changes.v1"
+  const displayLabel = data.serviceKind === "messaging" && data.label.includes("/")
+    ? data.label.slice(data.label.indexOf("/") + 1)
+    : data.label;
 
   return (
     <div className="flex flex-col items-center gap-1.5">
@@ -131,10 +141,12 @@ function ServiceNode({ data }: NodeProps<Node<ServiceStats>>) {
       />
       <div className="relative">
         <div
-          className={`flex h-20 w-20 flex-col items-center justify-center rounded-full border-2 bg-card shadow-md ${borderColor}`}
+          className={`flex flex-col items-center justify-center rounded-full border-2 bg-card shadow-md ${borderColor} ${
+            isImplicit ? "h-14 w-14 border-dashed" : "h-20 w-20"
+          }`}
         >
-          <Icon className="mb-0.5 h-4 w-4 text-muted-foreground" />
-          {data.totalCalls > 0 && (
+          <Icon className={`text-muted-foreground ${isImplicit ? "h-4 w-4" : "mb-0.5 h-4 w-4"}`} />
+          {!isImplicit && data.totalCalls > 0 && (
             <div className="flex flex-col items-center text-[10px] leading-tight text-muted-foreground">
               <span>{data.totalCalls} calls</span>
               <span>{formatDuration(data.avgDurationMs)}</span>
@@ -148,9 +160,19 @@ function ServiceNode({ data }: NodeProps<Node<ServiceStats>>) {
           </div>
         )}
       </div>
-      <span className="max-w-[120px] truncate text-center text-xs font-medium text-foreground">
-        {data.label}
+      <span
+        className={`truncate text-center font-medium text-foreground ${
+          isImplicit ? "max-w-[100px] text-[10px]" : "max-w-[120px] text-xs"
+        }`}
+        title={data.label}
+      >
+        {displayLabel}
       </span>
+      {isImplicit && data.totalCalls > 0 && (
+        <div className="flex flex-col items-center text-[9px] leading-tight text-muted-foreground -mt-1">
+          <span>{data.totalCalls} calls · {formatDuration(data.avgDurationMs)}</span>
+        </div>
+      )}
       <Handle
         type="source"
         position={Position.Bottom}
@@ -176,6 +198,7 @@ function ServiceEdge({
   data,
 }: EdgeProps<Edge<ServiceEdgeData>>) {
   const hasErrors = data != null && data.errorCount > 0;
+  const isAsync = data?.edgeType === "async";
   const color = hasErrors ? EDGE_RED : EDGE_GRAY;
 
   const [edgePath, labelX, labelY] = getBezierPath({
@@ -211,7 +234,12 @@ function ServiceEdge({
       <BaseEdge
         id={id}
         path={edgePath}
-        style={{ stroke: color, strokeWidth: 1 }}
+        style={{
+          stroke: color,
+          strokeWidth: 1,
+          strokeDasharray: isAsync ? "6 3" : undefined,
+          animation: isAsync ? "dash-flow 0.5s linear infinite" : undefined,
+        }}
         markerEnd={`url(#arrow-${id})`}
       />
       {labelText && (
@@ -248,6 +276,7 @@ export function ServiceMapView() {
     y: number;
     hasErrors: boolean;
     isImplicit: boolean;
+    serviceKind: ServiceKind;
   } | null>(null);
   const [drilldown, setDrilldown] = useState<{
     serviceName: string;
@@ -291,6 +320,7 @@ export function ServiceMapView() {
           callCount: 0,
           errorCount: 0,
           avgDurationMs: 0,
+          edgeType: e.data?.edgeType ?? "sync" as const,
         })),
       );
 
@@ -385,6 +415,7 @@ export function ServiceMapView() {
         y: event.clientY,
         hasErrors: node.data.totalErrors > 0,
         isImplicit: node.data.isImplicit,
+        serviceKind: node.data.serviceKind,
       });
     },
     [],
@@ -636,6 +667,7 @@ export function ServiceMapView() {
           y={contextMenu.y}
           hasErrors={contextMenu.hasErrors}
           isImplicit={contextMenu.isImplicit}
+          serviceKind={contextMenu.serviceKind}
           onClose={() => setContextMenu(null)}
           onDrilldown={(errorsOnly) =>
             setDrilldown({

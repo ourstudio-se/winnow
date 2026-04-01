@@ -120,6 +120,66 @@ function WaterfallRow({
   );
 }
 
+// --- Async bridge row ---
+
+function AsyncBridgeRow({
+  node,
+  traceStart,
+  traceDuration,
+}: {
+  node: SpanTreeNode;
+  traceStart: number;
+  traceDuration: number;
+}) {
+  // Find the earliest consumer child start time
+  const consumerChildren = node.children.filter(
+    (c) => c.span.span_kind === 5 && c.span.service_name !== node.span.service_name,
+  );
+  if (consumerChildren.length === 0 || traceDuration <= 0) return null;
+
+  const producerEnd = node.span.span_end_timestamp_nanos;
+  const firstConsumerStart = Math.min(
+    ...consumerChildren.map((c) => c.span.span_start_timestamp_nanos),
+  );
+
+  // Only show bridge if there's a meaningful gap
+  const gapNanos = firstConsumerStart - producerEnd;
+  if (gapNanos < traceDuration * 0.005) return null;
+
+  const offsetPct = ((producerEnd - traceStart) / traceDuration) * 100;
+  const widthPct = (gapNanos / traceDuration) * 100;
+  const gapMs = gapNanos / 1_000_000;
+
+  return (
+    <div
+      className="flex border-b border-border/30"
+      style={{ height: 20 }}
+    >
+      {/* Label area */}
+      <div
+        className="flex w-[30%] shrink-0 items-center border-r border-border px-2 text-[10px] text-muted-foreground/50 italic"
+        style={{ paddingLeft: `${8 + (node.depth + 1) * 20}px` }}
+      >
+        async {formatDuration(gapMs)}
+      </div>
+      {/* Bridge bar */}
+      <div className="relative flex-1">
+        <div
+          className="absolute top-2 h-[3px] rounded-full"
+          style={{
+            left: `${offsetPct}%`,
+            width: `${widthPct}%`,
+            minWidth: 4,
+            backgroundImage: "repeating-linear-gradient(90deg, oklch(0.5 0 0) 0 4px, transparent 4px 8px)",
+            backgroundSize: "8px 3px",
+            animation: "dash-flow-bg 0.5s linear infinite",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 // --- Span detail panel ---
 
 function AttributeList({
@@ -554,21 +614,29 @@ export function TraceDetailView() {
           <TimeRuler durationMs={traceDurationMs} />
           <div className="flex-1 overflow-y-auto">
             {tree.map((node) => (
-              <WaterfallRow
-                key={node.span.span_id}
-                node={node}
-                traceStart={traceStart}
-                traceDuration={traceDurationNanos}
-                serviceColors={serviceColors}
-                isSelected={node.span.span_id === selectedSpanId}
-                onClick={() =>
-                  setSelectedSpanId(
-                    node.span.span_id === selectedSpanId
-                      ? null
-                      : node.span.span_id,
-                  )
-                }
-              />
+              <span key={node.span.span_id}>
+                <WaterfallRow
+                  node={node}
+                  traceStart={traceStart}
+                  traceDuration={traceDurationNanos}
+                  serviceColors={serviceColors}
+                  isSelected={node.span.span_id === selectedSpanId}
+                  onClick={() =>
+                    setSelectedSpanId(
+                      node.span.span_id === selectedSpanId
+                        ? null
+                        : node.span.span_id,
+                    )
+                  }
+                />
+                {node.span.span_kind === 4 && (
+                  <AsyncBridgeRow
+                    node={node}
+                    traceStart={traceStart}
+                    traceDuration={traceDurationNanos}
+                  />
+                )}
+              </span>
             ))}
           </div>
         </div>

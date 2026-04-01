@@ -5,6 +5,7 @@ Simulates a microservice topology:
   api-gateway -> user-service -> postgres
   api-gateway -> order-service -> postgres
                  order-service -> redis
+                 order-service --(kafka/orders)--> notification-service
 
 Usage:
   pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http
@@ -48,6 +49,9 @@ SERVICES = {
         ],
     },
 }
+
+KAFKA_TOPIC = "orders"
+KAFKA_SYSTEM = "kafka"
 
 ENDPOINTS = [
     ("GET", "/api/orders"),
@@ -97,13 +101,16 @@ def simulate_request(providers, inject_error):
     gw_tp, gw_lp = providers["api-gateway"]
     us_tp, us_lp = providers["user-service"]
     os_tp, os_lp = providers["order-service"]
+    ns_tp, ns_lp = providers["notification-service"]
 
     gw_tracer = gw_tp.get_tracer("api-gateway")
     us_tracer = us_tp.get_tracer("user-service")
     os_tracer = os_tp.get_tracer("order-service")
+    ns_tracer = ns_tp.get_tracer("notification-service")
 
     gw_logger = make_logger("api-gateway", gw_lp)
     os_logger = make_logger("order-service", os_lp)
+    ns_logger = make_logger("notification-service", ns_lp)
 
     method, path = random.choice(ENDPOINTS)
     span_name = f"{method} {path}"
@@ -200,6 +207,32 @@ def simulate_request(providers, inject_error):
                 if not inject_error:
                     os_logger.info("Returned %d orders", random.randint(1, 50))
 
+                # order-service produces to Kafka (PRODUCER span)
+                if not inject_error and random.random() < 0.6:
+                    with os_tracer.start_as_current_span(
+                        f"{KAFKA_TOPIC} publish",
+                        kind=trace.SpanKind.PRODUCER,
+                        attributes={
+                            "messaging.system": KAFKA_SYSTEM,
+                            "messaging.destination.name": KAFKA_TOPIC,
+                            "messaging.operation": "publish",
+                        },
+                    ):
+                        time.sleep(random.uniform(0.001, 0.003))
+
+                        # notification-service consumes (CONSUMER span,
+                        # child of PRODUCER — context propagation)
+                        with ns_tracer.start_as_current_span(
+                            f"{KAFKA_TOPIC} process",
+                            kind=trace.SpanKind.CONSUMER,
+                            attributes={
+                                "messaging.system": KAFKA_SYSTEM,
+                                "messaging.destination.name": KAFKA_TOPIC,
+                                "messaging.operation": "process",
+                            },
+                        ):
+                            time.sleep(random.uniform(0.002, 0.008))
+
         if inject_error:
             root.set_status(trace.StatusCode.ERROR, "internal error")
             gw_logger.error("Request failed: %s %s -> 500", method, path)
@@ -230,7 +263,10 @@ def main():
 
     # Set up providers for each instrumented service
     providers = {}
-    for svc in ["api-gateway", "user-service", "order-service"]:
+    for svc in [
+        "api-gateway", "user-service", "order-service",
+        "notification-service",
+    ]:
         providers[svc] = setup_provider(svc, args.endpoint)
 
     errors = 0

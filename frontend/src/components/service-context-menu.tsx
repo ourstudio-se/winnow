@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router";
 import { FileText, Activity, ChevronRight, AlertTriangle } from "lucide-react";
+import type { ServiceKind } from "@/lib/service-graph";
 
 interface ServiceContextMenuProps {
   serviceName: string;
@@ -8,8 +9,25 @@ interface ServiceContextMenuProps {
   y: number;
   hasErrors: boolean;
   isImplicit: boolean;
+  serviceKind: ServiceKind;
   onClose: () => void;
   onDrilldown: (errorsOnly: boolean) => void;
+}
+
+/** Build a Tantivy query to find PRODUCER/CONSUMER spans for a messaging topic. */
+function messagingTopicQuery(nodeName: string): string {
+  // Extract topic from "system/topic" or use as-is
+  const topic = nodeName.includes("/")
+    ? nodeName.slice(nodeName.indexOf("/") + 1)
+    : nodeName;
+  // Search across common attribute keys (OTel semconv + bare kafka.*)
+  const topicClauses = [
+    `span_attributes.messaging.destination.name:"${topic}"`,
+    `span_attributes.messaging.destination:"${topic}"`,
+    `span_attributes.messaging.kafka.topic:"${topic}"`,
+    `span_attributes.kafka.topic:"${topic}"`,
+  ].join(" OR ");
+  return `(span_kind:4 OR span_kind:5) AND (${topicClauses})`;
 }
 
 export function ServiceContextMenu({
@@ -18,6 +36,7 @@ export function ServiceContextMenu({
   y,
   hasErrors,
   isImplicit,
+  serviceKind,
   onClose,
   onDrilldown,
 }: ServiceContextMenuProps) {
@@ -87,11 +106,13 @@ export function ServiceContextMenu({
         label="Show traces"
         onClick={() => {
           onClose();
-          navigate(
-            isImplicit
-              ? `/traces?q=${encodeURIComponent(`span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}"`)}`
-              : `/traces?f=${encodeURIComponent(`service_name:${serviceName}`)}`,
-          );
+          if (serviceKind === "messaging") {
+            navigate(`/traces?q=${encodeURIComponent(messagingTopicQuery(serviceName))}`);
+          } else if (isImplicit) {
+            navigate(`/traces?q=${encodeURIComponent(`span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}"`)}`);
+          } else {
+            navigate(`/traces?f=${encodeURIComponent(`service_name:${serviceName}`)}`);
+          }
         }}
       />
       <div className="mx-1 my-1 border-t border-border" />
