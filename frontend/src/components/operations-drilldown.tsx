@@ -8,6 +8,7 @@ interface OperationsDrilldownProps {
   serviceName: string;
   errorsOnly: boolean;
   isImplicit: boolean;
+  sourceService?: string;
   onClose: () => void;
   onToggleErrorsOnly: (errorsOnly: boolean) => void;
 }
@@ -73,6 +74,7 @@ export function OperationsDrilldownPanel({
   serviceName,
   errorsOnly,
   isImplicit,
+  sourceService,
   onClose,
   onToggleErrorsOnly,
 }: OperationsDrilldownProps) {
@@ -85,9 +87,11 @@ export function OperationsDrilldownPanel({
     setLoading(true);
     setError(null);
     try {
-      const base = isImplicit
-        ? `(span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
-        : `service_name:"${serviceName}"`;
+      const base = sourceService && isImplicit
+        ? `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
+        : isImplicit
+          ? `(span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
+          : `service_name:"${serviceName}"`;
       const errorQuery = `${base} AND span_status.code:2`;
       const okQuery = `${base} AND NOT span_status.code:2`;
 
@@ -150,7 +154,7 @@ export function OperationsDrilldownPanel({
     } finally {
       setLoading(false);
     }
-  }, [serviceName, errorsOnly, isImplicit]);
+  }, [serviceName, errorsOnly, isImplicit, sourceService]);
 
   useEffect(() => {
     fetchOperations();
@@ -162,7 +166,7 @@ export function OperationsDrilldownPanel({
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-medium text-foreground">
-            {serviceName}
+            {sourceService ? `${sourceService} → ${serviceName}` : serviceName}
           </h3>
           <p className="text-xs text-muted-foreground">Operations</p>
         </div>
@@ -213,7 +217,9 @@ export function OperationsDrilldownPanel({
               onClick={() => {
                 const params = new URLSearchParams();
                 if (isImplicit) {
-                  let q = `(span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:${op.fingerprint}`;
+                  let q = sourceService
+                    ? `service_name:"${sourceService}" AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:${op.fingerprint}`
+                    : `(span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:${op.fingerprint}`;
                   if (op.status === "error") q += " AND span_status.code:2";
                   params.append("q", q);
                 } else {

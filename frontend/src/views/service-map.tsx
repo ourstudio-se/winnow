@@ -253,6 +253,7 @@ export function ServiceMapView() {
     serviceName: string;
     errorsOnly: boolean;
     isImplicit: boolean;
+    sourceService?: string;
   } | null>(null);
 
   const filterBarStateRef = useRef<FilterState | undefined>(undefined);
@@ -387,6 +388,21 @@ export function ServiceMapView() {
       });
     },
     [],
+  );
+
+  const onEdgeClick = useCallback(
+    (_event: React.MouseEvent, edge: Edge<ServiceEdgeData>) => {
+      setContextMenu(null);
+      const destNode = nodes.find((n) => n.id === edge.target);
+      const isImplicit = destNode?.data.isImplicit ?? false;
+      setDrilldown({
+        serviceName: edge.target,
+        errorsOnly: false,
+        isImplicit,
+        sourceService: edge.source,
+      });
+    },
+    [nodes],
   );
 
   const onPaneClick = useCallback(() => {
@@ -584,6 +600,7 @@ export function ServiceMapView() {
               onNodeDrag={onNodeDrag}
               onNodeDragStop={onNodeDragStop}
               onNodeClick={onNodeClick}
+              onEdgeClick={onEdgeClick}
               onPaneClick={onPaneClick}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
@@ -603,6 +620,7 @@ export function ServiceMapView() {
               serviceName={drilldown.serviceName}
               errorsOnly={drilldown.errorsOnly}
               isImplicit={drilldown.isImplicit}
+              sourceService={drilldown.sourceService}
               onClose={() => setDrilldown(null)}
               onToggleErrorsOnly={(errorsOnly) =>
                 setDrilldown((prev) => (prev ? { ...prev, errorsOnly } : null))
