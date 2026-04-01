@@ -51,6 +51,8 @@ function WaterfallRow({
   traceDuration,
   serviceColors,
   isSelected,
+  isCollapsed,
+  onToggleCollapse,
   onClick,
 }: {
   node: SpanTreeNode;
@@ -58,11 +60,14 @@ function WaterfallRow({
   traceDuration: number;
   serviceColors: Map<string, string>;
   isSelected: boolean;
+  isCollapsed: boolean;
+  onToggleCollapse: (() => void) | null;
   onClick: () => void;
 }) {
   const span = node.span;
   const color = serviceColors.get(span.service_name) ?? "oklch(0.6 0 0)";
   const hasError = span.span_status?.code === 2;
+  const hasChildren = node.children.length > 0;
 
   const offsetPct =
     traceDuration > 0
@@ -86,18 +91,41 @@ function WaterfallRow({
     >
       {/* Label area — 30% */}
       <div
-        className="flex w-[30%] shrink-0 items-center gap-1.5 overflow-hidden border-r border-border px-2 text-xs"
-        style={{ paddingLeft: `${8 + node.depth * 20}px` }}
+        className="flex w-[30%] shrink-0 items-center overflow-hidden border-r border-border px-2 text-xs"
+        style={{ paddingLeft: `${4 + node.depth * 20}px` }}
       >
+        {/* Collapse/expand chevron */}
+        {hasChildren ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleCollapse?.();
+            }}
+            className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+          >
+            {isCollapsed ? (
+              <ChevronRight className="h-3 w-3" />
+            ) : (
+              <ChevronDown className="h-3 w-3" />
+            )}
+          </button>
+        ) : (
+          <span className="inline-block w-4 shrink-0" />
+        )}
         <span
-          className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+          className="ml-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full"
           style={{ backgroundColor: color }}
         />
-        <span className="truncate text-muted-foreground">
+        <span className="ml-1.5 truncate text-muted-foreground">
           {span.service_name}
         </span>
-        <span className="truncate font-medium">{span.span_name}</span>
-        {hasError && <AlertCircle className="h-3 w-3 shrink-0 text-red-500" />}
+        <span className="ml-1 truncate font-medium">{span.span_name}</span>
+        {hasError && <AlertCircle className="ml-1 h-3 w-3 shrink-0 text-red-500" />}
+        {isCollapsed && (
+          <span className="ml-1 shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground">
+            {countDescendants(node)}
+          </span>
+        )}
       </div>
 
       {/* Bar area — 70% */}
@@ -118,6 +146,15 @@ function WaterfallRow({
       </div>
     </div>
   );
+}
+
+/** Count all descendants of a tree node. */
+function countDescendants(node: SpanTreeNode): number {
+  let count = 0;
+  for (const child of node.children) {
+    count += 1 + countDescendants(child);
+  }
+  return count;
 }
 
 // --- Async bridge row ---
@@ -455,6 +492,16 @@ export function TraceDetailView() {
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(
     () => searchParams.get("span"),
   );
+  const [collapsedSpans, setCollapsedSpans] = useState<Set<string>>(new Set());
+
+  const toggleCollapse = useCallback((spanId: string) => {
+    setCollapsedSpans((prev) => {
+      const next = new Set(prev);
+      if (next.has(spanId)) next.delete(spanId);
+      else next.add(spanId);
+      return next;
+    });
+  }, []);
 
   const fetchTrace = useCallback(async () => {
     if (!traceId) return;
@@ -479,6 +526,22 @@ export function TraceDetailView() {
   }, [fetchTrace]);
 
   const tree = useMemo(() => buildSpanTree(spans), [spans]);
+
+  // Filter tree to hide children of collapsed spans
+  const visibleTree = useMemo(() => {
+    if (collapsedSpans.size === 0) return tree;
+    const result: SpanTreeNode[] = [];
+    let skipUntilDepth = Infinity;
+    for (const node of tree) {
+      if (node.depth > skipUntilDepth) continue;
+      skipUntilDepth = Infinity;
+      result.push(node);
+      if (collapsedSpans.has(node.span.span_id)) {
+        skipUntilDepth = node.depth;
+      }
+    }
+    return result;
+  }, [tree, collapsedSpans]);
 
   const serviceColors = useMemo(
     () => assignServiceColors(spans.map((s) => s.service_name)),
@@ -617,7 +680,7 @@ export function TraceDetailView() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <TimeRuler durationMs={traceDurationMs} />
         <div className="flex-1 overflow-y-auto">
-          {tree.map((node) => (
+          {visibleTree.map((node) => (
             <span key={node.span.span_id}>
               <WaterfallRow
                 node={node}
@@ -625,6 +688,12 @@ export function TraceDetailView() {
                 traceDuration={traceDurationNanos}
                 serviceColors={serviceColors}
                 isSelected={node.span.span_id === selectedSpanId}
+                isCollapsed={collapsedSpans.has(node.span.span_id)}
+                onToggleCollapse={
+                  node.children.length > 0
+                    ? () => toggleCollapse(node.span.span_id)
+                    : null
+                }
                 onClick={() =>
                   setSelectedSpanId(
                     node.span.span_id === selectedSpanId
@@ -636,7 +705,7 @@ export function TraceDetailView() {
               {node.span.span_id === selectedSpanId && selectedSpan && (
                 <SpanDetailInline span={selectedSpan} />
               )}
-              {node.span.span_kind === 4 && (
+              {node.span.span_kind === 4 && !collapsedSpans.has(node.span.span_id) && (
                 <AsyncBridgeRow
                   node={node}
                   traceStart={traceStart}
