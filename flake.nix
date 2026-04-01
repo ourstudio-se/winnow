@@ -6,11 +6,15 @@
     zig2nix.url = "github:Cloudef/zig2nix";
   };
 
-  outputs = { self, nixpkgs, zig2nix }:
-    let
-      flake-utils = zig2nix.inputs.flake-utils;
-    in flake-utils.lib.eachDefaultSystem (system:
-      let
+  outputs = {
+    self,
+    nixpkgs,
+    zig2nix,
+  }: let
+    flake-utils = zig2nix.inputs.flake-utils;
+  in
+    flake-utils.lib.eachDefaultSystem (
+      system: let
         env = zig2nix.outputs.zig-env.${system} {};
         pkgs = env.pkgs;
         embed-frontend = pkgs.writeShellScript "embed-frontend" ''
@@ -136,7 +140,7 @@
           src = ./backend;
 
           # protoc is needed for the gen-proto build step
-          nativeBuildInputs = [ pkgs.protobuf ];
+          nativeBuildInputs = [pkgs.protobuf];
 
           # Generate protobuf Zig code and embed frontend assets before the main build
           preBuild = ''
@@ -192,15 +196,14 @@
           };
         };
 
-        packages.generate-data = let
-          py = pkgs.python3.withPackages (ps: with ps; [
-            opentelemetry-api
-            opentelemetry-sdk
-            opentelemetry-exporter-otlp-proto-http
-          ]);
-        in pkgs.writeShellScriptBin "generate-data" ''
-          exec ${py}/bin/python3 ${./scripts/generate-data.py} "$@"
-        '';
+        packages.generate-data = pkgs.writers.writePython3Bin "generate-data" {
+          libraries = [
+            pkgs.python3Packages.opentelemetry-api
+            pkgs.python3Packages.opentelemetry-sdk
+            pkgs.python3Packages.opentelemetry-exporter-otlp-proto-http
+          ];
+          doCheck = false;
+        } (builtins.readFile ./scripts/generate-data.py);
 
         packages.nuke-indices = pkgs.writeShellScriptBin "nuke-indices" ''
           exec ${pkgs.python3}/bin/python3 ${./scripts/nuke-indices.py} "$@"

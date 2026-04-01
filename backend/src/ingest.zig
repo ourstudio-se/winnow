@@ -51,7 +51,7 @@ const SpanDoc = struct {
     span_dropped_attributes_count: u32,
     span_dropped_events_count: u32,
     span_dropped_links_count: u32,
-    span_status: SpanStatusDoc,
+    span_status: ?SpanStatusDoc,
     events: []const EventDoc,
     event_names: []const []const u8,
     links: []const LinkDoc,
@@ -78,8 +78,8 @@ pub fn handleTraces(
 
     // 2. Decode protobuf
     var pb_reader: Io.Reader = .fixed(body);
-    const otlp_request = otlp.ExportTraceServiceRequest.decode(&pb_reader, arena) catch {
-        log.err("protobuf decode failed", .{});
+    const otlp_request = otlp.ExportTraceServiceRequest.decode(&pb_reader, arena) catch |err| {
+        log.err("protobuf decode failed: {}", .{err});
         respondError(request, .bad_request, "Bad Request: invalid protobuf\n");
         return error.DecodeFailed;
     };
@@ -90,6 +90,8 @@ pub fn handleTraces(
         respondError(request, .internal_server_error, "Internal Server Error\n");
         return error.TransformFailed;
     };
+
+    std.log.debug("ndjson: {s}", .{ndjson});
 
     // 4. Ingest into Quickwit
     if (ndjson.len > 0) {
@@ -106,6 +108,8 @@ pub fn handleTraces(
             .{ .name = "content-type", .value = "application/x-protobuf" },
         },
     });
+
+    std.log.debug("finished ingesting trace", .{});
 }
 
 pub fn handleLogs(
@@ -149,6 +153,8 @@ pub fn handleLogs(
             .{ .name = "content-type", .value = "application/x-protobuf" },
         },
     });
+
+    std.log.debug("finished ingesting logs", .{});
 }
 
 fn respondError(request: *http.Server.Request, status: http.Status, msg: []const u8) void {
@@ -179,7 +185,7 @@ pub fn transformToNdjson(
         for (rs.scope_spans.items) |ss| {
             for (ss.spans.items) |span| {
                 const doc = try buildSpanDoc(arena, span, service_name, resource_attrs, resource_dropped);
-                try std.json.Stringify.value(doc, .{}, &ndjson.writer);
+                try std.json.Stringify.value(doc, .{ .emit_null_optional_fields = false }, &ndjson.writer);
                 try ndjson.writer.writeAll("\n");
             }
         }
@@ -207,10 +213,12 @@ fn buildSpanDoc(
     const events = try buildEvents(arena, span.events.items);
     const event_names = try extractEventNames(arena, span.events.items);
     const links = try buildLinks(arena, span.links.items);
-    const status_doc = if (span.status) |s| SpanStatusDoc{
+    const status_doc = if (span.status) |s| (if (s.code != .STATUS_CODE_UNSET) SpanStatusDoc{
         .code = @intCast(@intFromEnum(s.code)),
         .message = s.message,
-    } else SpanStatusDoc{ .code = 0, .message = "" };
+    } else null) else null;
+
+    std.log.debug("status_doc: {?}", .{status_doc});
 
     return .{
         .trace_id = trace_id,
@@ -281,15 +289,15 @@ const LogDoc = struct {
     body: std.json.Value,
     attributes: std.json.Value,
     dropped_attributes_count: u32,
-    trace_id: []const u8,
-    span_id: []const u8,
+    trace_id: ?[]const u8,
+    span_id: ?[]const u8,
     trace_flags: u64,
     resource_attributes: std.json.Value,
     resource_dropped_attributes_count: u32,
-    scope_name: []const u8,
-    scope_version: []const u8,
-    scope_attributes: std.json.Value,
-    scope_dropped_attributes_count: u32,
+    scope_name: ?[]const u8,
+    scope_version: ?[]const u8,
+    scope_attributes: ?std.json.Value,
+    scope_dropped_attributes_count: ?u32,
 };
 
 pub fn transformLogsToNdjson(
@@ -308,17 +316,19 @@ pub fn transformLogsToNdjson(
 
         for (rl.scope_logs.items) |sl| {
             const scope = sl.scope;
-            const scope_name: []const u8 = if (scope) |s| s.name else "";
-            const scope_version: []const u8 = if (scope) |s| s.version else "";
-            const scope_attrs = try kvListToJsonValue(
+            const scope_name: ?[]const u8 = if (scope) |s| s.name else null;
+            const scope_version: ?[]const u8 = if (scope) |s| s.version else null;
+            const scope_attrs = if (scope) |s| try kvListToJsonValue(
                 arena,
-                if (scope) |s| s.attributes.items else &.{},
-            );
-            const scope_dropped: u32 = if (scope) |s| s.dropped_attributes_count else 0;
+                s.attributes.items,
+            ) else null;
+            const scope_dropped: ?u32 = if (scope) |s| s.dropped_attributes_count else null;
 
             for (sl.log_records.items) |lr| {
+                const timestamp_nanos = if (lr.time_unix_nano == 0) lr.observed_time_unix_nano else lr.time_unix_nano;
+
                 const doc = LogDoc{
-                    .timestamp_nanos = lr.time_unix_nano,
+                    .timestamp_nanos = timestamp_nanos,
                     .observed_timestamp_nanos = lr.observed_time_unix_nano,
                     .service_name = service_name,
                     .severity_text = lr.severity_text,
@@ -326,8 +336,8 @@ pub fn transformLogsToNdjson(
                     .body = try bodyToJsonObject(arena, lr.body),
                     .attributes = try kvListToJsonValue(arena, lr.attributes.items),
                     .dropped_attributes_count = lr.dropped_attributes_count,
-                    .trace_id = try hexEncode(arena, lr.trace_id),
-                    .span_id = try hexEncode(arena, lr.span_id),
+                    .trace_id = if (lr.trace_id.len > 0) try hexEncode(arena, lr.trace_id) else null,
+                    .span_id = if (lr.span_id.len > 0) try hexEncode(arena, lr.span_id) else null,
                     .trace_flags = @intCast(lr.flags),
                     .resource_attributes = resource_attrs,
                     .resource_dropped_attributes_count = resource_dropped,

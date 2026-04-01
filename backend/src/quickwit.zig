@@ -162,6 +162,8 @@ pub const Quickwit = struct {
     pub fn searchRaw(self: Quickwit, arena: Allocator, index_id: []const u8, query_json: []const u8) error{ OutOfMemory, HttpError }!SearchResult {
         const url = try std.fmt.allocPrint(arena, "{s}/api/v1/{s}/search", .{ self.base_url, index_id });
 
+        std.log.debug("search {s}: {s}", .{ index_id, query_json });
+
         var response_buf: Io.Writer.Allocating = .init(arena);
 
         const result = self.http_client.fetch(.{
