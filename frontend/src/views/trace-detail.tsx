@@ -358,28 +358,27 @@ function SpanLogs({ spanId }: { spanId: string }) {
   );
 }
 
-function SpanDetailPanel({ span }: { span: SpanDocument }) {
+function SpanDetailInline({ span }: { span: SpanDocument }) {
   const hasError = span.span_status?.code === 2;
 
   return (
-    <div className="flex w-96 shrink-0 flex-col overflow-y-auto border-l border-border bg-card">
-      {/* Header */}
-      <div className="border-b border-border px-4 py-3">
+    <div className="border-b border-border bg-card/50">
+      <div className="px-4 py-3 space-y-3">
+        {/* Header */}
         <div className="flex items-center gap-2">
-          <h3 className="truncate text-sm font-semibold">{span.span_name}</h3>
+          <h3 className="text-sm font-semibold">{span.span_name}</h3>
           {hasError && <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />}
+          <span className="text-xs text-muted-foreground">·</span>
+          <Link
+            to={`/traces?f=${encodeURIComponent(`service_name:${span.service_name}`)}`}
+            className="text-xs text-muted-foreground underline decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
+          >
+            {span.service_name}
+          </Link>
         </div>
-        <Link
-          to={`/traces?f=${encodeURIComponent(`service_name:${span.service_name}`)}`}
-          className="mt-0.5 block text-xs text-muted-foreground underline decoration-muted-foreground/30 hover:text-foreground hover:decoration-foreground"
-        >
-          {span.service_name}
-        </Link>
-      </div>
 
-      {/* Summary fields */}
-      <div className="space-y-3 px-4 py-3">
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+        {/* Summary grid */}
+        <div className="grid grid-cols-4 gap-x-6 gap-y-1.5 text-xs">
           <div>
             <span className="text-muted-foreground">Kind</span>
             <p className="font-medium">{spanKindLabel(span.span_kind)}</p>
@@ -420,14 +419,21 @@ function SpanDetailPanel({ span }: { span: SpanDocument }) {
           )}
         </div>
 
-        <div className="space-y-1 border-t border-border pt-3">
-          <AttributeList label="Span Attributes" attrs={span.span_attributes} />
-          <AttributeList
-            label="Resource Attributes"
-            attrs={span.resource_attributes}
-          />
-          <SpanEvents events={span.events} />
-          <SpanLogs spanId={span.span_id} />
+        {/* Attribute sections — side by side */}
+        <div className="grid grid-cols-3 gap-4 border-t border-border pt-3">
+          <div className="space-y-1">
+            <AttributeList label="Span Attributes" attrs={span.span_attributes} />
+            <SpanEvents events={span.events} />
+          </div>
+          <div>
+            <AttributeList
+              label="Resource Attributes"
+              attrs={span.resource_attributes}
+            />
+          </div>
+          <div>
+            <SpanLogs spanId={span.span_id} />
+          </div>
         </div>
       </div>
     </div>
@@ -607,42 +613,39 @@ export function TraceDetailView() {
         )}
       </div>
 
-      {/* Waterfall + detail panel */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Waterfall */}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <TimeRuler durationMs={traceDurationMs} />
-          <div className="flex-1 overflow-y-auto">
-            {tree.map((node) => (
-              <span key={node.span.span_id}>
-                <WaterfallRow
+      {/* Waterfall */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <TimeRuler durationMs={traceDurationMs} />
+        <div className="flex-1 overflow-y-auto">
+          {tree.map((node) => (
+            <span key={node.span.span_id}>
+              <WaterfallRow
+                node={node}
+                traceStart={traceStart}
+                traceDuration={traceDurationNanos}
+                serviceColors={serviceColors}
+                isSelected={node.span.span_id === selectedSpanId}
+                onClick={() =>
+                  setSelectedSpanId(
+                    node.span.span_id === selectedSpanId
+                      ? null
+                      : node.span.span_id,
+                  )
+                }
+              />
+              {node.span.span_id === selectedSpanId && selectedSpan && (
+                <SpanDetailInline span={selectedSpan} />
+              )}
+              {node.span.span_kind === 4 && (
+                <AsyncBridgeRow
                   node={node}
                   traceStart={traceStart}
                   traceDuration={traceDurationNanos}
-                  serviceColors={serviceColors}
-                  isSelected={node.span.span_id === selectedSpanId}
-                  onClick={() =>
-                    setSelectedSpanId(
-                      node.span.span_id === selectedSpanId
-                        ? null
-                        : node.span.span_id,
-                    )
-                  }
                 />
-                {node.span.span_kind === 4 && (
-                  <AsyncBridgeRow
-                    node={node}
-                    traceStart={traceStart}
-                    traceDuration={traceDurationNanos}
-                  />
-                )}
-              </span>
-            ))}
-          </div>
+              )}
+            </span>
+          ))}
         </div>
-
-        {/* Detail panel */}
-        {selectedSpan && <SpanDetailPanel span={selectedSpan} />}
       </div>
     </div>
   );
