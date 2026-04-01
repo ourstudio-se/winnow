@@ -23,7 +23,6 @@ import {
   forceCenter,
   forceCollide,
   forceY,
-  type SimulationNodeDatum,
   type SimulationLinkDatum,
   type Simulation,
 } from "d3-force";
@@ -32,79 +31,27 @@ import { searchTraces } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { ServiceContextMenu } from "@/components/service-context-menu";
 import { OperationsDrilldownPanel } from "@/components/operations-drilldown";
+import {
+  type AggregatedEdge,
+  type EdgesAggResponse,
+  type ServiceAggResponse,
+  type ServiceKind,
+  type ServiceStats,
+  type ServiceEdgeData,
+  type SampledSpan,
+  type ForceNode,
+  TRACE_SAMPLE_SIZE,
+  MAX_SAMPLED_SPANS,
+  formatDuration,
+  parseEdgesFromAggs,
+  deriveEdgesFromTraces,
+  mergeEdges,
+  computeServiceStats,
+  computeDepths,
+  computeForceLayout,
+} from "@/lib/service-graph";
 
-// --- Types ---
-
-interface AggregatedEdge {
-  source: string;
-  dest: string;
-  callCount: number;
-  errorCount: number;
-  avgDurationMs: number;
-}
-
-interface InnerTermsBucket {
-  key: string;
-  doc_count: number;
-  avg_duration?: { value: number };
-}
-interface OuterTermsBucket {
-  key: string;
-  doc_count: number;
-  dests: { buckets: InnerTermsBucket[] };
-}
-interface EdgesAggResponse {
-  edges: { buckets: OuterTermsBucket[] };
-}
-
-interface ServiceTermsBucket {
-  key: string;
-  doc_count: number;
-  avg_duration?: { value: number };
-}
-interface ServiceAggResponse {
-  services: { buckets: ServiceTermsBucket[] };
-}
-
-type ServiceKind = "database" | "cache" | "gateway" | "service";
-
-interface ServiceStats {
-  [key: string]: unknown;
-  label: string;
-  serviceKind: ServiceKind;
-  totalCalls: number;
-  totalErrors: number;
-  avgDurationMs: number;
-  errorRate: number;
-  isRoot: boolean;
-  isImplicit: boolean;
-}
-
-type ServiceEdgeData = {
-  [key: string]: unknown;
-  callCount: number;
-  errorCount: number;
-  avgDurationMs: number;
-};
-
-// --- Helpers ---
-
-function formatDuration(ms: number): string {
-  if (ms < 1) return "<1ms";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60000).toFixed(1)}m`;
-}
-
-function inferServiceKind(name: string): ServiceKind {
-  const lower = name.toLowerCase();
-  if (/postgres|mysql|maria|mongo|cockroach|sqlite|oracle|mssql|sql|db/.test(lower))
-    return "database";
-  if (/redis|memcache|cache|valkey|dragonfly/.test(lower)) return "cache";
-  if (/gateway|proxy|nginx|envoy|haproxy|ingress|lb|load.?balancer/.test(lower))
-    return "gateway";
-  return "service";
-}
+// --- Icons ---
 
 const serviceKindIcon: Record<ServiceKind, typeof Server> = {
   database: Database,
@@ -112,192 +59,6 @@ const serviceKindIcon: Record<ServiceKind, typeof Server> = {
   gateway: Globe,
   service: Server,
 };
-
-// --- Aggregation ---
-
-function parseEdgesFromAggs(
-  allAgg: EdgesAggResponse,
-  errorAgg: EdgesAggResponse,
-): AggregatedEdge[] {
-  // Build error count lookup: "source\0dest" → count
-  const errorLookup = new Map<string, number>();
-  for (const outer of errorAgg.edges.buckets) {
-    for (const inner of outer.dests.buckets) {
-      errorLookup.set(`${outer.key}\0${inner.key}`, inner.doc_count);
-    }
-  }
-
-  const result: AggregatedEdge[] = [];
-  for (const outer of allAgg.edges.buckets) {
-    for (const inner of outer.dests.buckets) {
-      result.push({
-        source: outer.key,
-        dest: inner.key,
-        callCount: inner.doc_count,
-        errorCount: errorLookup.get(`${outer.key}\0${inner.key}`) ?? 0,
-        avgDurationMs: Math.round(inner.avg_duration?.value ?? 0),
-      });
-    }
-  }
-  return result;
-}
-
-// --- Per-node stats ---
-
-function computeServiceStats(
-  serviceNames: string[],
-  aggregated: AggregatedEdge[],
-  svcTotals: Map<string, { count: number; avgDurationMs: number }>,
-  svcErrors: Map<string, number>,
-): Map<string, ServiceStats> {
-  const sources = new Set(aggregated.map((e) => e.source));
-  const dests = new Set(aggregated.map((e) => e.dest));
-  const roots = new Set(serviceNames.filter((n) => !dests.has(n)));
-  // Implicit leaves: appear only as destinations, never as sources (e.g. postgres, redis)
-  const implicitLeaves = new Set(serviceNames.filter((n) => !sources.has(n) && dests.has(n)));
-
-  const stats = new Map<string, ServiceStats>();
-  for (const name of serviceNames) {
-    if (implicitLeaves.has(name)) {
-      // Implicit leaf: use edge-derived stats (incoming CLIENT spans targeting this service)
-      let totalCalls = 0, totalErrors = 0, weightedDuration = 0;
-      for (const edge of aggregated) {
-        if (edge.dest === name) {
-          totalCalls += edge.callCount;
-          totalErrors += edge.errorCount;
-          weightedDuration += edge.avgDurationMs * edge.callCount;
-        }
-      }
-      stats.set(name, {
-        label: name,
-        serviceKind: inferServiceKind(name),
-        totalCalls,
-        totalErrors,
-        avgDurationMs: totalCalls > 0 ? Math.round(weightedDuration / totalCalls) : 0,
-        errorRate: totalCalls > 0 ? totalErrors / totalCalls : 0,
-        isRoot: false,
-        isImplicit: true,
-      });
-    } else {
-      // Real service: use per-service all-span-kind stats for accurate health
-      const svc = svcTotals.get(name);
-      const errors = svcErrors.get(name) ?? 0;
-      const totalCalls = svc?.count ?? 0;
-      stats.set(name, {
-        label: name,
-        serviceKind: inferServiceKind(name),
-        totalCalls,
-        totalErrors: errors,
-        avgDurationMs: Math.round(svc?.avgDurationMs ?? 0),
-        errorRate: totalCalls > 0 ? errors / totalCalls : 0,
-        isRoot: roots.has(name),
-        isImplicit: false,
-      });
-    }
-  }
-
-  return stats;
-}
-
-// --- Force-directed layout (d3-force) ---
-
-interface ForceNode extends SimulationNodeDatum {
-  id: string;
-  depth: number;
-}
-
-function computeDepths(
-  serviceNames: string[],
-  aggregated: AggregatedEdge[],
-): Map<string, number> {
-  const inDegree = new Map<string, number>();
-  const adj = new Map<string, string[]>();
-  for (const name of serviceNames) {
-    inDegree.set(name, 0);
-    adj.set(name, []);
-  }
-  for (const edge of aggregated) {
-    adj.get(edge.source)!.push(edge.dest);
-    inDegree.set(edge.dest, (inDegree.get(edge.dest) ?? 0) + 1);
-  }
-  const depth = new Map<string, number>();
-  const queue: string[] = [];
-  for (const name of serviceNames) {
-    if (inDegree.get(name) === 0) {
-      queue.push(name);
-      depth.set(name, 0);
-    }
-  }
-  while (queue.length > 0) {
-    const node = queue.shift()!;
-    const d = depth.get(node)!;
-    for (const neighbor of adj.get(node)!) {
-      if (!depth.has(neighbor) || depth.get(neighbor)! < d + 1) {
-        depth.set(neighbor, d + 1);
-      }
-      const remaining = inDegree.get(neighbor)! - 1;
-      inDegree.set(neighbor, remaining);
-      if (remaining === 0) queue.push(neighbor);
-    }
-  }
-  const maxDepth = Math.max(0, ...depth.values());
-  for (const name of serviceNames) {
-    if (!depth.has(name)) depth.set(name, maxDepth + 1);
-  }
-  return depth;
-}
-
-function computeForceLayout(
-  serviceNames: string[],
-  aggregated: AggregatedEdge[],
-): Map<string, { x: number; y: number }> {
-  const positions = new Map<string, { x: number; y: number }>();
-  if (serviceNames.length === 0) return positions;
-  if (serviceNames.length === 1) {
-    positions.set(serviceNames[0], { x: 0, y: 0 });
-    return positions;
-  }
-
-  const depths = computeDepths(serviceNames, aggregated);
-
-  const nodes: ForceNode[] = serviceNames.map((name) => ({
-    id: name,
-    depth: depths.get(name)!,
-  }));
-
-  const nameIndex = new Map(serviceNames.map((n, i) => [n, i]));
-  const links: SimulationLinkDatum<ForceNode>[] = aggregated.map((e) => ({
-    source: nameIndex.get(e.source)!,
-    target: nameIndex.get(e.dest)!,
-  }));
-
-  const simulation = forceSimulation<ForceNode>(nodes)
-    .force(
-      "link",
-      forceLink<ForceNode, SimulationLinkDatum<ForceNode>>(links)
-        .distance(180)
-        .strength(0.7),
-    )
-    .force("charge", forceManyBody<ForceNode>().strength(-600))
-    .force("center", forceCenter(0, 0))
-    .force("collide", forceCollide<ForceNode>(60))
-    .force(
-      "y",
-      forceY<ForceNode>((d) => d.depth * 150).strength(0.3),
-    )
-    .stop();
-
-  for (let i = 0; i < 300; i++) simulation.tick();
-
-  for (const node of nodes) {
-    positions.set(node.id, {
-      x: Math.round(node.x ?? 0),
-      y: Math.round(node.y ?? 0),
-    });
-  }
-
-  return positions;
-}
 
 // --- Graph building ---
 
@@ -309,10 +70,15 @@ function buildGraph(
   nodes: Node<ServiceStats>[];
   edges: Edge<ServiceEdgeData>[];
 } {
+  // Include all known services — not just those with edges — so isolated
+  // services (no cross-service calls, no peer.service) still appear as nodes.
   const serviceNames = new Set<string>();
   for (const e of aggregated) {
     serviceNames.add(e.source);
     serviceNames.add(e.dest);
+  }
+  for (const name of svcTotals.keys()) {
+    serviceNames.add(name);
   }
   const sorted = [...serviceNames].sort();
   const positions = computeForceLayout(sorted, aggregated);
@@ -637,8 +403,18 @@ export function ServiceMapView() {
           effectiveFilters?.query && effectiveFilters.query !== "*"
             ? effectiveFilters.query
             : "";
+
+        // peer.service agg queries still use CLIENT/PRODUCER filter
         const kindFilter = "(span_kind:3 OR span_kind:4)";
         const baseQuery = userQuery ? `${kindFilter} AND ${userQuery}` : kindFilter;
+
+        // Trace ID sampling: terms agg naturally surfaces multi-service traces
+        // (they have more spans, so rank higher by doc_count)
+        const traceIdAggs = {
+          trace_ids: {
+            terms: { field: "trace_id", size: TRACE_SAMPLE_SIZE },
+          },
+        };
 
         const nestedAggs = {
           edges: {
@@ -665,7 +441,13 @@ export function ServiceMapView() {
         const svcQuery = userQuery || "*";
         const svcErrorQuery = userQuery ? `span_status.code:2 AND ${userQuery}` : "span_status.code:2";
 
-        const [allRes, errorRes, svcAllRes, svcErrRes] = await Promise.all([
+        // Wave 1: 5 parallel queries (trace ID sampling + 4 existing aggs)
+        const [traceIdRes, allRes, errorRes, svcAllRes, svcErrRes] = await Promise.all([
+          searchTraces<never>({
+            query: svcQuery,
+            max_hits: 0,
+            aggs: traceIdAggs,
+          }),
           searchTraces<never>({
             query: baseQuery,
             max_hits: 0,
@@ -688,9 +470,36 @@ export function ServiceMapView() {
           }),
         ]);
 
+        // Wave 2: bulk fetch ALL spans for sampled traces (no user filter — the
+        // filter already scoped which traces we sampled; we need the full trace
+        // to build cross-service edges, not just the matching spans)
+        const traceIdBuckets = (traceIdRes.aggregations as { trace_ids: { buckets: { key: string }[] } }).trace_ids.buckets;
+        const traceIds = traceIdBuckets.map((b) => b.key);
+        let sampledSpans: SampledSpan[] = [];
+        if (traceIds.length > 0) {
+          try {
+            const traceQuery = traceIds.map((id) => `trace_id:${id}`).join(" OR ");
+            const spansRes = await searchTraces<SampledSpan>({
+              query: traceQuery,
+              max_hits: MAX_SAMPLED_SPANS,
+            });
+            sampledSpans = spansRes.hits;
+          } catch (e) {
+            console.warn("Failed to fetch sampled spans for parent-child edges, falling back to peer.service only:", e);
+          }
+        }
+
+        // Derive edges from parent-child relationships
+        const pcEdges = deriveEdgesFromTraces(sampledSpans);
+        const realServiceNames = new Set(sampledSpans.map((s) => s.service_name));
+
+        // Parse peer.service edges from aggregations
         const allAgg = allRes.aggregations as unknown as EdgesAggResponse;
         const errorAgg = errorRes.aggregations as unknown as EdgesAggResponse;
-        const aggregated = parseEdgesFromAggs(allAgg, errorAgg);
+        const peerEdges = parseEdgesFromAggs(allAgg, errorAgg);
+
+        // Merge: parent-child takes priority, peer.service only for implicit leaves
+        const aggregated = mergeEdges(pcEdges, peerEdges, realServiceNames);
 
         // Per-service stats (all span kinds) for node health
         const svcAllAgg = svcAllRes.aggregations as unknown as ServiceAggResponse;

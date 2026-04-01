@@ -166,6 +166,21 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [ ] Verify: `pnpm build` succeeds with no TS errors
 - [ ] Verify: frontend loads instantly (no "Connecting..." spinner)
 
+## Hybrid Service Map Edges (parent-child joins + peer.service)
+
+- [x] Extract types/helpers/layout from `service-map.tsx` into `frontend/src/lib/service-graph.ts`
+- [x] Add `deriveEdgesFromTraces()` — group sampled spans by trace, walk parent-child links across service boundaries
+- [x] Add `mergeEdges()` — parent-child edges take priority, peer.service only for implicit leaves
+- [x] Rewrite `fetchData` in `service-map.tsx` — two-wave strategy: Wave 1 (5 parallel: trace ID terms agg + 4 aggs), Wave 2 (1 sequential: bulk span fetch for sampled traces)
+- [x] Trace ID sampling via terms agg on `trace_id` (naturally surfaces multi-service traces since they have more spans)
+- [x] Show isolated services (no edges) as nodes via `svcTotals` in `buildGraph`
+- [x] Graceful degradation: if bulk trace fetch fails, fall back to peer.service-only edges
+- [x] Fix `isImplicit`: based on whether service emits own spans (`svcTotals`), not edge topology
+- [x] Leaf CLIENT span detection: infer implicit peer from `peer.service` → `db.system` attributes for CLIENT spans with no cross-service child
+- [x] Verify: `pnpm build` succeeds with no TS errors
+- [x] Verify: service map shows edges from parent-child joins (not just peer.service)
+- [x] Verify: implicit leaf nodes (databases, caches) appear via attribute inference
+
 ## Dev Tooling
 
 - [x] `docker-compose.yml` — Quickwit v0.9.0-rc with persistent volume (ports 7290/7291)

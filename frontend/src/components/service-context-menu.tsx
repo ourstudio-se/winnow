@@ -89,7 +89,7 @@ export function ServiceContextMenu({
           onClose();
           navigate(
             isImplicit
-              ? `/traces?f=${encodeURIComponent(`span_attributes.peer.service:${serviceName}`)}`
+              ? `/traces?q=${encodeURIComponent(`span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}"`)}`
               : `/traces?f=${encodeURIComponent(`service_name:${serviceName}`)}`,
           );
         }}

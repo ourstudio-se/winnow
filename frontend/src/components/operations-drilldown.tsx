@@ -86,7 +86,7 @@ export function OperationsDrilldownPanel({
     setError(null);
     try {
       const base = isImplicit
-        ? `(span_kind:3 OR span_kind:4) AND span_attributes.peer.service:"${serviceName}"`
+        ? `(span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
         : `service_name:"${serviceName}"`;
       const errorQuery = `${base} AND span_status.code:2`;
       const okQuery = `${base} AND NOT span_status.code:2`;
@@ -212,12 +212,16 @@ export function OperationsDrilldownPanel({
               op={op}
               onClick={() => {
                 const params = new URLSearchParams();
-                params.append("f", isImplicit
-                  ? `span_attributes.peer.service:${serviceName}`
-                  : `service_name:${serviceName}`);
-                params.append("f", `span_fingerprint:${op.fingerprint}`);
-                if (op.status === "error") {
-                  params.append("f", "span_status.code:2");
+                if (isImplicit) {
+                  let q = `(span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:${op.fingerprint}`;
+                  if (op.status === "error") q += " AND span_status.code:2";
+                  params.append("q", q);
+                } else {
+                  params.append("f", `service_name:${serviceName}`);
+                  params.append("f", `span_fingerprint:${op.fingerprint}`);
+                  if (op.status === "error") {
+                    params.append("f", "span_status.code:2");
+                  }
                 }
                 navigate(`/traces?${params.toString()}`);
               }}

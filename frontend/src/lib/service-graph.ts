@@ -1,0 +1,410 @@
+// --- Types ---
+
+export interface AggregatedEdge {
+  source: string;
+  dest: string;
+  callCount: number;
+  errorCount: number;
+  avgDurationMs: number;
+}
+
+export interface InnerTermsBucket {
+  key: string;
+  doc_count: number;
+  avg_duration?: { value: number };
+}
+export interface OuterTermsBucket {
+  key: string;
+  doc_count: number;
+  dests: { buckets: InnerTermsBucket[] };
+}
+export interface EdgesAggResponse {
+  edges: { buckets: OuterTermsBucket[] };
+}
+
+export interface ServiceTermsBucket {
+  key: string;
+  doc_count: number;
+  avg_duration?: { value: number };
+}
+export interface ServiceAggResponse {
+  services: { buckets: ServiceTermsBucket[] };
+}
+
+export type ServiceKind = "database" | "cache" | "gateway" | "service";
+
+export interface ServiceStats {
+  [key: string]: unknown;
+  label: string;
+  serviceKind: ServiceKind;
+  totalCalls: number;
+  totalErrors: number;
+  avgDurationMs: number;
+  errorRate: number;
+  isRoot: boolean;
+  isImplicit: boolean;
+}
+
+export type ServiceEdgeData = {
+  [key: string]: unknown;
+  callCount: number;
+  errorCount: number;
+  avgDurationMs: number;
+};
+
+// --- Sampled span type for parent-child joining ---
+
+export interface SampledSpan {
+  trace_id: string;
+  span_id: string;
+  parent_span_id: string | null;
+  service_name: string;
+  span_kind: number;
+  span_status: { code?: number } | null;
+  span_duration_millis: number;
+  span_attributes: Record<string, unknown> | null;
+}
+
+export const TRACE_SAMPLE_SIZE = 200;
+export const MAX_SAMPLED_SPANS = 5000;
+
+// --- Helpers ---
+
+export function formatDuration(ms: number): string {
+  if (ms < 1) return "<1ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60000).toFixed(1)}m`;
+}
+
+export function inferServiceKind(name: string): ServiceKind {
+  const lower = name.toLowerCase();
+  if (/postgres|mysql|maria|mongo|cockroach|sqlite|oracle|mssql|sql|db/.test(lower))
+    return "database";
+  if (/redis|memcache|cache|valkey|dragonfly/.test(lower)) return "cache";
+  if (/gateway|proxy|nginx|envoy|haproxy|ingress|lb|load.?balancer/.test(lower))
+    return "gateway";
+  return "service";
+}
+
+// --- Aggregation (peer.service edges) ---
+
+export function parseEdgesFromAggs(
+  allAgg: EdgesAggResponse,
+  errorAgg: EdgesAggResponse,
+): AggregatedEdge[] {
+  const errorLookup = new Map<string, number>();
+  for (const outer of errorAgg.edges.buckets) {
+    for (const inner of outer.dests.buckets) {
+      errorLookup.set(`${outer.key}\0${inner.key}`, inner.doc_count);
+    }
+  }
+
+  const result: AggregatedEdge[] = [];
+  for (const outer of allAgg.edges.buckets) {
+    for (const inner of outer.dests.buckets) {
+      result.push({
+        source: outer.key,
+        dest: inner.key,
+        callCount: inner.doc_count,
+        errorCount: errorLookup.get(`${outer.key}\0${inner.key}`) ?? 0,
+        avgDurationMs: Math.round(inner.avg_duration?.value ?? 0),
+      });
+    }
+  }
+  return result;
+}
+
+// --- Parent-child edge derivation from sampled traces ---
+
+/** Infer implicit peer name from span attributes (for CLIENT spans with no child in the trace). */
+function inferPeerName(attrs: Record<string, unknown> | null): string | null {
+  if (!attrs) return null;
+  if (typeof attrs["peer.service"] === "string") return attrs["peer.service"];
+  if (typeof attrs["db.system"] === "string") return attrs["db.system"];
+  return null;
+}
+
+function addEdgeStat(
+  edgeStats: Map<string, { count: number; errors: number; totalDuration: number }>,
+  source: string,
+  dest: string,
+  durationMs: number,
+  isError: boolean,
+) {
+  const key = `${source}\0${dest}`;
+  const existing = edgeStats.get(key);
+  if (existing) {
+    existing.count += 1;
+    existing.errors += isError ? 1 : 0;
+    existing.totalDuration += durationMs;
+  } else {
+    edgeStats.set(key, { count: 1, errors: isError ? 1 : 0, totalDuration: durationMs });
+  }
+}
+
+export function deriveEdgesFromTraces(spans: SampledSpan[]): AggregatedEdge[] {
+  if (spans.length === 0) return [];
+
+  // Group spans by trace_id
+  const traceGroups = new Map<string, SampledSpan[]>();
+  for (const span of spans) {
+    let group = traceGroups.get(span.trace_id);
+    if (!group) {
+      group = [];
+      traceGroups.set(span.trace_id, group);
+    }
+    group.push(span);
+  }
+
+  // Accumulate edge stats: "source\0dest" → {count, errors, totalDuration}
+  const edgeStats = new Map<string, { count: number; errors: number; totalDuration: number }>();
+
+  for (const [, traceSpans] of traceGroups) {
+    // Build span_id → span lookup for this trace
+    const spanById = new Map<string, SampledSpan>();
+    for (const span of traceSpans) {
+      spanById.set(span.span_id, span);
+    }
+
+    // Track which CLIENT/PRODUCER spans have a cross-service child
+    const hasExternalChild = new Set<string>();
+
+    // Walk each span, find cross-service parent-child links
+    for (const child of traceSpans) {
+      if (!child.parent_span_id) continue;
+      const parent = spanById.get(child.parent_span_id);
+      if (!parent) continue;
+      if (parent.service_name === child.service_name) continue;
+
+      hasExternalChild.add(parent.span_id);
+      addEdgeStat(
+        edgeStats,
+        parent.service_name,
+        child.service_name,
+        child.span_duration_millis,
+        child.span_status?.code === 2,
+      );
+    }
+
+    // For CLIENT/PRODUCER spans (kind 3/4) with no cross-service child,
+    // infer the destination from attributes (e.g. db.system, peer.service)
+    for (const span of traceSpans) {
+      if (span.span_kind !== 3 && span.span_kind !== 4) continue;
+      if (hasExternalChild.has(span.span_id)) continue;
+      const peerName = inferPeerName(span.span_attributes);
+      if (!peerName || peerName === span.service_name) continue;
+      addEdgeStat(
+        edgeStats,
+        span.service_name,
+        peerName,
+        span.span_duration_millis,
+        span.span_status?.code === 2,
+      );
+    }
+  }
+
+  const result: AggregatedEdge[] = [];
+  for (const [key, stats] of edgeStats) {
+    const [source, dest] = key.split("\0");
+    result.push({
+      source,
+      dest,
+      callCount: stats.count,
+      errorCount: stats.errors,
+      avgDurationMs: stats.count > 0 ? Math.round(stats.totalDuration / stats.count) : 0,
+    });
+  }
+  return result;
+}
+
+// --- Merge parent-child edges with peer.service edges ---
+
+export function mergeEdges(
+  parentChildEdges: AggregatedEdge[],
+  peerServiceEdges: AggregatedEdge[],
+  realServiceNames: Set<string>,
+): AggregatedEdge[] {
+  // Start with all parent-child edges
+  const edgeMap = new Map<string, AggregatedEdge>();
+  for (const edge of parentChildEdges) {
+    edgeMap.set(`${edge.source}\0${edge.dest}`, edge);
+  }
+
+  // Add peer.service edges only for destinations that are NOT real services
+  // (i.e., implicit leaves like databases/caches that don't emit their own spans)
+  for (const edge of peerServiceEdges) {
+    if (realServiceNames.has(edge.dest)) continue;
+    const key = `${edge.source}\0${edge.dest}`;
+    if (!edgeMap.has(key)) {
+      edgeMap.set(key, edge);
+    }
+  }
+
+  return [...edgeMap.values()];
+}
+
+// --- Per-node stats ---
+
+export function computeServiceStats(
+  serviceNames: string[],
+  aggregated: AggregatedEdge[],
+  svcTotals: Map<string, { count: number; avgDurationMs: number }>,
+  svcErrors: Map<string, number>,
+): Map<string, ServiceStats> {
+  const dests = new Set(aggregated.map((e) => e.dest));
+  const roots = new Set(serviceNames.filter((n) => !dests.has(n)));
+  // Implicit = doesn't emit its own spans (not in svcTotals), only appears as an edge destination
+  const implicitLeaves = new Set(serviceNames.filter((n) => !svcTotals.has(n)));
+
+  const stats = new Map<string, ServiceStats>();
+  for (const name of serviceNames) {
+    if (implicitLeaves.has(name)) {
+      let totalCalls = 0, totalErrors = 0, weightedDuration = 0;
+      for (const edge of aggregated) {
+        if (edge.dest === name) {
+          totalCalls += edge.callCount;
+          totalErrors += edge.errorCount;
+          weightedDuration += edge.avgDurationMs * edge.callCount;
+        }
+      }
+      stats.set(name, {
+        label: name,
+        serviceKind: inferServiceKind(name),
+        totalCalls,
+        totalErrors,
+        avgDurationMs: totalCalls > 0 ? Math.round(weightedDuration / totalCalls) : 0,
+        errorRate: totalCalls > 0 ? totalErrors / totalCalls : 0,
+        isRoot: false,
+        isImplicit: true,
+      });
+    } else {
+      const svc = svcTotals.get(name);
+      const errors = svcErrors.get(name) ?? 0;
+      const totalCalls = svc?.count ?? 0;
+      stats.set(name, {
+        label: name,
+        serviceKind: inferServiceKind(name),
+        totalCalls,
+        totalErrors: errors,
+        avgDurationMs: Math.round(svc?.avgDurationMs ?? 0),
+        errorRate: totalCalls > 0 ? errors / totalCalls : 0,
+        isRoot: roots.has(name),
+        isImplicit: false,
+      });
+    }
+  }
+
+  return stats;
+}
+
+// --- Force-directed layout (d3-force) ---
+
+import {
+  forceSimulation,
+  forceLink,
+  forceManyBody,
+  forceCenter,
+  forceCollide,
+  forceY,
+  type SimulationNodeDatum,
+  type SimulationLinkDatum,
+} from "d3-force";
+
+export interface ForceNode extends SimulationNodeDatum {
+  id: string;
+  depth: number;
+}
+
+export function computeDepths(
+  serviceNames: string[],
+  aggregated: AggregatedEdge[],
+): Map<string, number> {
+  const inDegree = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+  for (const name of serviceNames) {
+    inDegree.set(name, 0);
+    adj.set(name, []);
+  }
+  for (const edge of aggregated) {
+    adj.get(edge.source)!.push(edge.dest);
+    inDegree.set(edge.dest, (inDegree.get(edge.dest) ?? 0) + 1);
+  }
+  const depth = new Map<string, number>();
+  const queue: string[] = [];
+  for (const name of serviceNames) {
+    if (inDegree.get(name) === 0) {
+      queue.push(name);
+      depth.set(name, 0);
+    }
+  }
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    const d = depth.get(node)!;
+    for (const neighbor of adj.get(node)!) {
+      if (!depth.has(neighbor) || depth.get(neighbor)! < d + 1) {
+        depth.set(neighbor, d + 1);
+      }
+      const remaining = inDegree.get(neighbor)! - 1;
+      inDegree.set(neighbor, remaining);
+      if (remaining === 0) queue.push(neighbor);
+    }
+  }
+  const maxDepth = Math.max(0, ...depth.values());
+  for (const name of serviceNames) {
+    if (!depth.has(name)) depth.set(name, maxDepth + 1);
+  }
+  return depth;
+}
+
+export function computeForceLayout(
+  serviceNames: string[],
+  aggregated: AggregatedEdge[],
+): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number }>();
+  if (serviceNames.length === 0) return positions;
+  if (serviceNames.length === 1) {
+    positions.set(serviceNames[0], { x: 0, y: 0 });
+    return positions;
+  }
+
+  const depths = computeDepths(serviceNames, aggregated);
+
+  const nodes: ForceNode[] = serviceNames.map((name) => ({
+    id: name,
+    depth: depths.get(name)!,
+  }));
+
+  const nameIndex = new Map(serviceNames.map((n, i) => [n, i]));
+  const links: SimulationLinkDatum<ForceNode>[] = aggregated.map((e) => ({
+    source: nameIndex.get(e.source)!,
+    target: nameIndex.get(e.dest)!,
+  }));
+
+  const simulation = forceSimulation<ForceNode>(nodes)
+    .force(
+      "link",
+      forceLink<ForceNode, SimulationLinkDatum<ForceNode>>(links)
+        .distance(180)
+        .strength(0.7),
+    )
+    .force("charge", forceManyBody<ForceNode>().strength(-600))
+    .force("center", forceCenter(0, 0))
+    .force("collide", forceCollide<ForceNode>(60))
+    .force(
+      "y",
+      forceY<ForceNode>((d) => d.depth * 150).strength(0.3),
+    )
+    .stop();
+
+  for (let i = 0; i < 300; i++) simulation.tick();
+
+  for (const node of nodes) {
+    positions.set(node.id, {
+      x: Math.round(node.x ?? 0),
+      y: Math.round(node.y ?? 0),
+    });
+  }
+
+  return positions;
+}
