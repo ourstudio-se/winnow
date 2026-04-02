@@ -14,9 +14,9 @@ export interface SpanDocument {
   resource_attributes: Record<string, unknown> | null;
   span_status: { code?: number; message?: string } | null;
   events: Array<{
-    event_name: string;
-    event_timestamp_nanos: number;
-    event_attributes: Record<string, unknown>;
+    name: string;
+    time_unix_nano: number;
+    attributes: Record<string, unknown>;
   }> | null;
   links: unknown[] | null;
   is_root: boolean;

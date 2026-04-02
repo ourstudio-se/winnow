@@ -166,7 +166,7 @@ export function TracesView() {
         className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
       >
         <Map className="h-3 w-3" />
-        Service Map
+        Show in Map
       </Link>
     );
   }, [searchParams]);

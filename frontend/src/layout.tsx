@@ -21,10 +21,9 @@ function Sidebar() {
   const { panelContent } = useSidebarPanel();
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r bg-card">
-      <div className="flex h-14 items-center px-4">
+      <div className="flex h-14 shrink-0 items-center border-b border-border px-4">
         <span className="text-lg font-bold tracking-tight">Winnow</span>
       </div>
-      <Separator />
       <div className="flex flex-col overflow-y-auto px-3 py-3">
         <SidebarNav />
       </div>

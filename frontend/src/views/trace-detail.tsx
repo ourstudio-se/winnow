@@ -289,15 +289,15 @@ function SpanEvents({
               className="rounded-md border border-border/50 bg-muted/20 px-2.5 py-2"
             >
               <div className="flex items-center justify-between text-xs">
-                <span className="font-medium">{evt.event_name}</span>
+                <span className="font-medium">{evt.name}</span>
                 <span className="text-muted-foreground">
-                  {formatTimestampShort(evt.event_timestamp_nanos)}
+                  {formatTimestampShort(evt.time_unix_nano)}
                 </span>
               </div>
-              {evt.event_attributes &&
-                Object.keys(evt.event_attributes).length > 0 && (
+              {evt.attributes &&
+                Object.keys(evt.attributes).length > 0 && (
                   <div className="mt-1.5 space-y-0.5">
-                    {Object.entries(evt.event_attributes).map(([key, val]) => (
+                    {Object.entries(evt.attributes).map(([key, val]) => (
                       <div key={key} className="flex gap-2 text-xs">
                         <span className="shrink-0 text-muted-foreground">
                           {key}
@@ -623,7 +623,7 @@ export function TraceDetailView() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Header bar */}
-      <div className="flex items-center gap-3 border-b border-border bg-card px-4 py-2.5">
+      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
         <button
           onClick={goBack}
           className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -668,7 +668,7 @@ export function TraceDetailView() {
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <Map className="h-3 w-3" />
-          Service Map
+          Show in Map
         </Link>
         {numHits > spans.length && (
           <span className="text-xs text-amber-500">
