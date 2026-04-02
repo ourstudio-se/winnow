@@ -342,6 +342,9 @@ export function ServiceMapView() {
     svcErrors: Map<string, number>;
   } | null>(null);
 
+  // Store sampled spans for edge operations drilldown (same data as edge counts)
+  const sampledSpansRef = useRef<SampledSpan[]>([]);
+
   // Simulation refs
   const simRef = useRef<Simulation<ForceNode, SimulationLinkDatum<ForceNode>> | null>(null);
   const simNodeMapRef = useRef(new Map<string, ForceNode>());
@@ -590,8 +593,12 @@ export function ServiceMapView() {
             },
           },
         };
-        const svcQuery = userQuery || "*";
-        const svcErrorQuery = userQuery ? `span_status.code:2 AND ${userQuery}` : "span_status.code:2";
+        // Node stats use only SERVER (kind=2) + CONSUMER (kind=5) — actual inbound calls
+        const svcKindFilter = "(span_kind:2 OR span_kind:5)";
+        const svcQuery = userQuery ? `${svcKindFilter} AND ${userQuery}` : svcKindFilter;
+        const svcErrorQuery = userQuery
+          ? `${svcKindFilter} AND span_status.code:2 AND ${userQuery}`
+          : `${svcKindFilter} AND span_status.code:2`;
 
         // Wave 1: 5 parallel queries (trace ID sampling + 4 existing aggs)
         const [traceIdRes, allRes, errorRes, svcAllRes, svcErrRes] = await Promise.all([
@@ -640,6 +647,9 @@ export function ServiceMapView() {
             console.warn("Failed to fetch sampled spans for parent-child edges, falling back to peer.service only:", e);
           }
         }
+
+        // Store sampled spans for edge operations drilldown
+        sampledSpansRef.current = sampledSpans;
 
         // Derive edges from parent-child relationships
         const pcEdges = deriveEdgesFromTraces(sampledSpans);
@@ -794,6 +804,7 @@ export function ServiceMapView() {
               errorsOnly={drilldown.errorsOnly}
               isImplicit={drilldown.isImplicit}
               sourceService={drilldown.sourceService}
+              sampledSpans={sampledSpansRef.current}
               onClose={() => setDrilldown(null)}
               onToggleErrorsOnly={(errorsOnly) =>
                 setDrilldown((prev) => (prev ? { ...prev, errorsOnly } : null))

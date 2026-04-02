@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { X, AlertTriangle, CircleCheck, Loader2 } from "lucide-react";
 import { searchTraces } from "@/lib/api";
 import { SPAN_KIND_SHORT, formatDuration } from "@/lib/traces";
 import { parseTimeParam, buildTimeRangeClause } from "@/lib/time";
+import { type SampledSpan, deriveEdgeOperations } from "@/lib/service-graph";
 
 interface OperationsDrilldownProps {
   serviceName: string;
   errorsOnly: boolean;
   isImplicit: boolean;
   sourceService?: string;
+  sampledSpans?: SampledSpan[];
   onClose: () => void;
   onToggleErrorsOnly: (errorsOnly: boolean) => void;
 }
@@ -76,6 +78,7 @@ export function OperationsDrilldownPanel({
   errorsOnly,
   isImplicit,
   sourceService,
+  sampledSpans,
   onClose,
   onToggleErrorsOnly,
 }: OperationsDrilldownProps) {
@@ -85,17 +88,62 @@ export function OperationsDrilldownPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Edge → real service: derive operations client-side from sampled spans
+  // (same parent-child join logic that produces the edge count labels)
+  const useClientSide = !!sourceService && !isImplicit && !!sampledSpans;
+
+  const clientSideOps = useMemo(() => {
+    if (!useClientSide) return null;
+    return deriveEdgeOperations(sampledSpans, sourceService!, serviceName);
+  }, [useClientSide, sampledSpans, sourceService, serviceName]);
+
+  // Client-side path: convert DerivedOperation[] → OperationRow[]
+  useEffect(() => {
+    if (!useClientSide || !clientSideOps) return;
+
+    const rows: OperationRow[] = [];
+    for (const op of clientSideOps) {
+      if (op.errorCount > 0) {
+        rows.push({
+          fingerprint: `${op.spanName}\0${op.spanKind}`,
+          spanName: op.spanName,
+          spanKind: op.spanKind,
+          count: op.errorCount,
+          avgDurationMs: op.avgDurationMs,
+          status: "error",
+        });
+      }
+      const okCount = op.count - op.errorCount;
+      if (okCount > 0 && !errorsOnly) {
+        rows.push({
+          fingerprint: `${op.spanName}\0${op.spanKind}`,
+          spanName: op.spanName,
+          spanKind: op.spanKind,
+          count: okCount,
+          avgDurationMs: op.avgDurationMs,
+          status: "ok",
+        });
+      }
+    }
+    rows.sort((a, b) => b.count - a.count);
+    setOperations(rows);
+    setLoading(false);
+    setError(null);
+  }, [useClientSide, clientSideOps, errorsOnly]);
+
+  // Server-side path: Quickwit queries (node drilldowns + implicit targets)
   const fetchOperations = useCallback(async () => {
+    if (useClientSide) return;
     setLoading(true);
     setError(null);
     try {
       const timeSel = parseTimeParam(searchParams.get("time"));
       const timeClause = buildTimeRangeClause(timeSel);
-      const serviceBase = sourceService && isImplicit
-        ? `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
-        : isImplicit
-          ? `(span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
-          : `service_name:"${serviceName}"`;
+      const serviceBase = isImplicit
+        ? sourceService
+          ? `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
+          : `(span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
+        : `service_name:"${serviceName}" AND (span_kind:2 OR span_kind:5)`;
       const base = `${timeClause} AND ${serviceBase}`;
       const errorQuery = `${base} AND span_status.code:2`;
       const okQuery = `${base} AND NOT span_status.code:2`;
@@ -187,11 +235,11 @@ export function OperationsDrilldownPanel({
     } finally {
       setLoading(false);
     }
-  }, [serviceName, errorsOnly, isImplicit, sourceService, searchParams]);
+  }, [serviceName, errorsOnly, isImplicit, sourceService, searchParams, useClientSide]);
 
   useEffect(() => {
-    fetchOperations();
-  }, [fetchOperations]);
+    if (!useClientSide) fetchOperations();
+  }, [fetchOperations, useClientSide]);
 
   return (
     <div className="flex w-96 shrink-0 flex-col overflow-hidden border-l border-border bg-card">
@@ -254,6 +302,11 @@ export function OperationsDrilldownPanel({
                   let q = sourceService
                     ? `service_name:"${sourceService}" AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:"${fp}"`
                     : `(span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:"${fp}"`;
+                  if (op.status === "error") q += " AND span_status.code:2";
+                  params.append("q", q);
+                } else if (sourceService) {
+                  // Edge → real service: filter by source service + span name
+                  let q = `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND span_name:"${op.spanName}"`;
                   if (op.status === "error") q += " AND span_status.code:2";
                   params.append("q", q);
                 } else {

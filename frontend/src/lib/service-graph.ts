@@ -63,6 +63,7 @@ export interface SampledSpan {
   span_id: string;
   parent_span_id: string | null;
   service_name: string;
+  span_name: string;
   span_kind: number;
   span_status: { code?: number } | null;
   span_duration_millis: number;
@@ -320,6 +321,84 @@ export function deriveEdgesFromTraces(spans: SampledSpan[]): AggregatedEdge[] {
       edgeType: stats.edgeType,
     });
   }
+  return result;
+}
+
+// --- Derive per-operation stats for a specific edge from sampled spans ---
+
+export interface DerivedOperation {
+  spanName: string;
+  spanKind: number;
+  count: number;
+  errorCount: number;
+  avgDurationMs: number;
+}
+
+/**
+ * For edge sourceService → targetService, walk sampled traces and find
+ * cross-service parent-child pairs. Groups by the source-side (CLIENT/PRODUCER)
+ * span's operation name — exactly matching how deriveEdgesFromTraces counts.
+ */
+export function deriveEdgeOperations(
+  spans: SampledSpan[],
+  sourceService: string,
+  targetService: string,
+): DerivedOperation[] {
+  const traceGroups = new Map<string, SampledSpan[]>();
+  for (const span of spans) {
+    let group = traceGroups.get(span.trace_id);
+    if (!group) {
+      group = [];
+      traceGroups.set(span.trace_id, group);
+    }
+    group.push(span);
+  }
+
+  const opStats = new Map<string, { count: number; errors: number; totalDuration: number; spanKind: number }>();
+
+  for (const [, traceSpans] of traceGroups) {
+    const spanById = new Map<string, SampledSpan>();
+    for (const span of traceSpans) {
+      spanById.set(span.span_id, span);
+    }
+
+    for (const child of traceSpans) {
+      if (!child.parent_span_id) continue;
+      const parent = spanById.get(child.parent_span_id);
+      if (!parent) continue;
+      if (parent.service_name !== sourceService) continue;
+      if (child.service_name !== targetService) continue;
+
+      // Cross-service span for this edge — group by source-side operation
+      const key = `${parent.span_name}\0${parent.span_kind}`;
+      const existing = opStats.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.errors += child.span_status?.code === 2 ? 1 : 0;
+        existing.totalDuration += parent.span_duration_millis;
+      } else {
+        opStats.set(key, {
+          count: 1,
+          errors: child.span_status?.code === 2 ? 1 : 0,
+          totalDuration: parent.span_duration_millis,
+          spanKind: parent.span_kind,
+        });
+      }
+    }
+  }
+
+  const result: DerivedOperation[] = [];
+  for (const [key, stats] of opStats) {
+    const [spanName] = key.split("\0");
+    result.push({
+      spanName,
+      spanKind: stats.spanKind,
+      count: stats.count,
+      errorCount: stats.errors,
+      avgDurationMs: stats.count > 0 ? Math.round(stats.totalDuration / stats.count) : 0,
+    });
+  }
+  result.sort((a, b) => b.count - a.count);
   return result;
 }
 
