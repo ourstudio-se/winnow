@@ -513,3 +513,83 @@ export function computeForceLayout(
 
   return positions;
 }
+
+// --- Hierarchical (DAG) layout ---
+
+export function computeHierarchicalLayout(
+  serviceNames: string[],
+  aggregated: AggregatedEdge[],
+): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number }>();
+  if (serviceNames.length === 0) return positions;
+  if (serviceNames.length === 1) {
+    positions.set(serviceNames[0], { x: 0, y: 0 });
+    return positions;
+  }
+
+  const depths = computeDepths(serviceNames, aggregated);
+
+  // Group nodes by layer
+  const layers = new Map<number, string[]>();
+  for (const name of serviceNames) {
+    const d = depths.get(name)!;
+    let layer = layers.get(d);
+    if (!layer) {
+      layer = [];
+      layers.set(d, layer);
+    }
+    layer.push(name);
+  }
+
+  // Build adjacency for barycenter ordering
+  const children = new Map<string, string[]>();
+  for (const name of serviceNames) children.set(name, []);
+  for (const edge of aggregated) {
+    children.get(edge.source)!.push(edge.dest);
+  }
+
+  // Order each layer by barycenter of parent positions (minimize crossings)
+  const xIndex = new Map<string, number>();
+  const sortedDepths = [...layers.keys()].sort((a, b) => a - b);
+
+  // First layer: sort alphabetically
+  const firstLayer = layers.get(sortedDepths[0])!;
+  firstLayer.sort();
+  firstLayer.forEach((name, i) => xIndex.set(name, i));
+
+  // Subsequent layers: order by average x-index of parents
+  for (let li = 1; li < sortedDepths.length; li++) {
+    const layer = layers.get(sortedDepths[li])!;
+    const parentAvg = new Map<string, number>();
+    for (const name of layer) {
+      // Find all parents (nodes in previous layers with edges to this node)
+      let sum = 0, count = 0;
+      for (const edge of aggregated) {
+        if (edge.dest === name && xIndex.has(edge.source)) {
+          sum += xIndex.get(edge.source)!;
+          count++;
+        }
+      }
+      parentAvg.set(name, count > 0 ? sum / count : 0);
+    }
+    layer.sort((a, b) => (parentAvg.get(a) ?? 0) - (parentAvg.get(b) ?? 0));
+    layer.forEach((name, i) => xIndex.set(name, i));
+  }
+
+  // Assign positions
+  const layerSpacingY = 160;
+  const nodeSpacingX = 200;
+
+  for (const [depth, layer] of layers) {
+    const totalWidth = (layer.length - 1) * nodeSpacingX;
+    const startX = -totalWidth / 2;
+    for (let i = 0; i < layer.length; i++) {
+      positions.set(layer[i], {
+        x: Math.round(startX + i * nodeSpacingX),
+        y: Math.round(depth * layerSpacingY),
+      });
+    }
+  }
+
+  return positions;
+}

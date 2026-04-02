@@ -128,6 +128,21 @@
   to { background-position: 8px 0; }
 }
 
+/* Service map edge hover: highlight hovered edge, dim the rest */
+.react-flow__edge {
+  transition: opacity 0.15s;
+}
+.react-flow__edge .react-flow__edge-path {
+  transition: stroke 0.15s, stroke-width 0.15s;
+}
+.react-flow__edges:has(.react-flow__edge:hover) .react-flow__edge:not(:hover) {
+  opacity: 0.15;
+}
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: white !important;
+  stroke-width: 2 !important;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

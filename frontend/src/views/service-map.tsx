@@ -4,6 +4,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  ControlButton,
   Handle,
   Position,
   BaseEdge,
@@ -26,7 +27,7 @@ import {
   type SimulationLinkDatum,
   type Simulation,
 } from "d3-force";
-import { Server, Database, Globe, Zap, Inbox, AlertTriangle } from "lucide-react";
+import { Server, Database, Globe, Zap, Inbox, AlertTriangle, GitBranch, Waypoints } from "lucide-react";
 import { searchTraces } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { ServiceContextMenu } from "@/components/service-context-menu";
@@ -49,6 +50,7 @@ import {
   computeServiceStats,
   computeDepths,
   computeForceLayout,
+  computeHierarchicalLayout,
 } from "@/lib/service-graph";
 
 // --- Icons ---
@@ -61,12 +63,17 @@ const serviceKindIcon: Record<ServiceKind, typeof Server> = {
   service: Server,
 };
 
+// --- Layout modes ---
+
+type LayoutMode = "hierarchical" | "force";
+
 // --- Graph building ---
 
 function buildGraph(
   aggregated: AggregatedEdge[],
   svcTotals: Map<string, { count: number; avgDurationMs: number }>,
   svcErrors: Map<string, number>,
+  layoutMode: LayoutMode = "hierarchical",
 ): {
   nodes: Node<ServiceStats>[];
   edges: Edge<ServiceEdgeData>[];
@@ -82,7 +89,9 @@ function buildGraph(
     serviceNames.add(name);
   }
   const sorted = [...serviceNames].sort();
-  const positions = computeForceLayout(sorted, aggregated);
+  const positions = layoutMode === "hierarchical"
+    ? computeHierarchicalLayout(sorted, aggregated)
+    : computeForceLayout(sorted, aggregated);
   const stats = computeServiceStats(sorted, aggregated, svcTotals, svcErrors);
 
   const nodes: Node<ServiceStats>[] = sorted.map((name) => {
@@ -240,6 +249,7 @@ function ServiceEdge({
           strokeDasharray: isAsync ? "6 3" : undefined,
           animation: isAsync ? "dash-flow 0.5s linear infinite" : undefined,
         }}
+        interactionWidth={20}
         markerEnd={`url(#arrow-${id})`}
       />
       {labelText && (
@@ -270,6 +280,7 @@ export function ServiceMapView() {
   const [edges, setEdges] = useState<Edge<ServiceEdgeData>[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("hierarchical");
   const [contextMenu, setContextMenu] = useState<{
     serviceName: string;
     x: number;
@@ -286,6 +297,13 @@ export function ServiceMapView() {
   } | null>(null);
 
   const filterBarStateRef = useRef<FilterState | undefined>(undefined);
+
+  // Store raw graph data for re-layout on mode toggle
+  const graphDataRef = useRef<{
+    aggregated: AggregatedEdge[];
+    svcTotals: Map<string, { count: number; avgDurationMs: number }>;
+    svcErrors: Map<string, number>;
+  } | null>(null);
 
   // Simulation refs
   const simRef = useRef<Simulation<ForceNode, SimulationLinkDatum<ForceNode>> | null>(null);
@@ -560,10 +578,17 @@ export function ServiceMapView() {
           svcErrors.set(b.key, b.doc_count);
         }
 
-        const graph = buildGraph(aggregated, svcTotals, svcErrors);
+        // Store raw data for re-layout on mode toggle
+        graphDataRef.current = { aggregated, svcTotals, svcErrors };
+
+        const graph = buildGraph(aggregated, svcTotals, svcErrors, layoutMode);
         setNodes(graph.nodes);
         setEdges(graph.edges);
-        startSimulation(graph.nodes, graph.edges);
+        if (layoutMode === "force") {
+          startSimulation(graph.nodes, graph.edges);
+        } else {
+          simRef.current?.stop();
+        }
       } catch (e) {
         setError(
           e instanceof Error ? e.message : "Failed to fetch service graph",
@@ -572,7 +597,7 @@ export function ServiceMapView() {
         setLoading(false);
       }
     },
-    [startSimulation],
+    [startSimulation, layoutMode],
   );
 
   const handleFilterChange = useCallback(
@@ -582,6 +607,25 @@ export function ServiceMapView() {
     },
     [fetchData],
   );
+
+  // Re-layout when mode changes (without re-fetching data)
+  const toggleLayout = useCallback(() => {
+    setLayoutMode((prev) => {
+      const next: LayoutMode = prev === "hierarchical" ? "force" : "hierarchical";
+      const data = graphDataRef.current;
+      if (data) {
+        const graph = buildGraph(data.aggregated, data.svcTotals, data.svcErrors, next);
+        setNodes(graph.nodes);
+        setEdges(graph.edges);
+        if (next === "force") {
+          startSimulation(graph.nodes, graph.edges);
+        } else {
+          simRef.current?.stop();
+        }
+      }
+      return next;
+    });
+  }, [startSimulation]);
 
   // Cleanup simulation on unmount
   useEffect(() => {
@@ -627,9 +671,9 @@ export function ServiceMapView() {
               nodes={nodes}
               edges={edges}
               onNodesChange={handleNodesChange}
-              onNodeDragStart={onNodeDragStart}
-              onNodeDrag={onNodeDrag}
-              onNodeDragStop={onNodeDragStop}
+              onNodeDragStart={layoutMode === "force" ? onNodeDragStart : undefined}
+              onNodeDrag={layoutMode === "force" ? onNodeDrag : undefined}
+              onNodeDragStop={layoutMode === "force" ? onNodeDragStop : undefined}
               onNodeClick={onNodeClick}
               onEdgeClick={onEdgeClick}
               onPaneClick={onPaneClick}
@@ -638,12 +682,19 @@ export function ServiceMapView() {
               colorMode="dark"
               fitView
               fitViewOptions={{ padding: 0.4 }}
-              nodesDraggable
+              nodesDraggable={layoutMode === "force"}
               nodesConnectable={false}
               proOptions={{ hideAttribution: true }}
             >
               <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-              <Controls />
+              <Controls>
+                <ControlButton
+                  onClick={toggleLayout}
+                  title={layoutMode === "hierarchical" ? "Switch to force layout" : "Switch to hierarchical layout"}
+                >
+                  {layoutMode === "hierarchical" ? <Waypoints className="h-4 w-4" /> : <GitBranch className="h-4 w-4" />}
+                </ControlButton>
+              </Controls>
             </ReactFlow>
           </div>
           {drilldown && (

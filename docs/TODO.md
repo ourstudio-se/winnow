@@ -198,6 +198,9 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Messaging topic display: strip system prefix from label, show full name on hover
 - [x] "Show traces" on topic nodes: queries PRODUCER/CONSUMER spans by topic attribute (not peer.service)
 - [x] Async bridge in trace waterfall: animated dashed bar shows gap between PRODUCER end and CONSUMER start
+- [x] Inline span details (Jaeger-style): expand below selected row instead of side pane, 4-col summary + 3-col attributes
+- [x] Collapsible span tree: chevron toggle (▶/▼) with descendant count badge, separate from detail expansion via stopPropagation
+- [x] Service map layout toggle: hierarchical (DAG) layout as default with toggle to force-directed; barycenter ordering minimizes crossings; node dragging only in force mode
 - [ ] Verify: service map shows dashed animated edges for messaging, solid for sync
 - [ ] Verify: implicit nodes (postgres, redis, kafka/orders) render with dashed borders
 
