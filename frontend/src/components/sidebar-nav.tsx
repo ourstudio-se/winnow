@@ -48,10 +48,10 @@ export function SidebarNav({ collapsed }: { collapsed: boolean }) {
               end={item.to === "/"}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  "flex items-center gap-2 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
                   isActive
                     ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                    : "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground",
                 )
               }
             >

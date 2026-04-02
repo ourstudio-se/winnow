@@ -34,7 +34,7 @@ export function Layout() {
       >
         <button
           onClick={toggle}
-          className="relative h-14 shrink-0 border-b border-border overflow-hidden cursor-pointer hover:bg-accent/50 transition-colors"
+          className="relative h-14 shrink-0 border-b border-border overflow-hidden cursor-pointer"
         >
           <img
             src={logoExpanded}
