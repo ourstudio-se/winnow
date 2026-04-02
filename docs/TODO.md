@@ -203,6 +203,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Service map layout toggle: hierarchical (DAG) layout as default with toggle to force-directed; barycenter ordering minimizes crossings; node dragging only in force mode
 - [x] Fix "calls" semantics: node stats count only SERVER/CONSUMER spans (inbound calls), node drilldown uses SERVER/CONSUMER
 - [x] Edge operations drilldown uses sampled-span parent-child joins (same as edge count labels), not Quickwit queries that can't express cross-service targeting
+- [x] Fix isImplicit: based on `realServiceNames` (from sampled spans), not `svcTotals` (SERVER/CONSUMER only) — client-only services like frontends no longer misclassified as implicit
 - [ ] Verify: service map shows dashed animated edges for messaging, solid for sync
 - [ ] Verify: implicit nodes (postgres, redis, kafka/orders) render with dashed borders
 

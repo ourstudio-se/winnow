@@ -103,9 +103,10 @@ export function OperationsDrilldownPanel({
 
     const rows: OperationRow[] = [];
     for (const op of clientSideOps) {
+      const fp = op.spanFingerprint ?? `${op.spanName}\0${op.spanKind}`;
       if (op.errorCount > 0) {
         rows.push({
-          fingerprint: `${op.spanName}\0${op.spanKind}`,
+          fingerprint: fp,
           spanName: op.spanName,
           spanKind: op.spanKind,
           count: op.errorCount,
@@ -116,7 +117,7 @@ export function OperationsDrilldownPanel({
       const okCount = op.count - op.errorCount;
       if (okCount > 0 && !errorsOnly) {
         rows.push({
-          fingerprint: `${op.spanName}\0${op.spanKind}`,
+          fingerprint: fp,
           spanName: op.spanName,
           spanKind: op.spanKind,
           count: okCount,
@@ -305,10 +306,12 @@ export function OperationsDrilldownPanel({
                   if (op.status === "error") q += " AND span_status.code:2";
                   params.append("q", q);
                 } else if (sourceService) {
-                  // Edge → real service: filter by source service + span name
-                  let q = `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND span_name:"${op.spanName}"`;
-                  if (op.status === "error") q += " AND span_status.code:2";
-                  params.append("q", q);
+                  // Edge → real service: filter by source + fingerprint
+                  params.append("f", `service_name:${sourceService}`);
+                  params.append("f", `span_fingerprint:${fp}`);
+                  if (op.status === "error") {
+                    params.append("f", "span_status.code:2");
+                  }
                 } else {
                   params.append("f", `service_name:${serviceName}`);
                   params.append("f", `span_fingerprint:${fp}`);

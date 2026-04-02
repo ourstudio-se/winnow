@@ -8,6 +8,7 @@ interface ServiceContextMenuProps {
   x: number;
   y: number;
   hasErrors: boolean;
+  hasCalls: boolean;
   isImplicit: boolean;
   serviceKind: ServiceKind;
   onClose: () => void;
@@ -35,6 +36,7 @@ export function ServiceContextMenu({
   x,
   y,
   hasErrors,
+  hasCalls,
   isImplicit,
   serviceKind,
   onClose,
@@ -115,24 +117,28 @@ export function ServiceContextMenu({
           }
         }}
       />
-      <div className="mx-1 my-1 border-t border-border" />
-      <MenuItem
-        icon={<ChevronRight className="h-4 w-4" />}
-        label="Operations overview"
-        onClick={() => {
-          onClose();
-          onDrilldown(false);
-        }}
-      />
-      {hasErrors && (
-        <MenuItem
-          icon={<AlertTriangle className="h-4 w-4" />}
-          label="Operations — errors only"
-          onClick={() => {
-            onClose();
-            onDrilldown(true);
-          }}
-        />
+      {hasCalls && (
+        <>
+          <div className="mx-1 my-1 border-t border-border" />
+          <MenuItem
+            icon={<ChevronRight className="h-4 w-4" />}
+            label="Operations overview"
+            onClick={() => {
+              onClose();
+              onDrilldown(false);
+            }}
+          />
+          {hasErrors && (
+            <MenuItem
+              icon={<AlertTriangle className="h-4 w-4" />}
+              label="Operations — errors only"
+              onClick={() => {
+                onClose();
+                onDrilldown(true);
+              }}
+            />
+          )}
+        </>
       )}
     </div>
   );

@@ -73,6 +73,7 @@ function buildGraph(
   aggregated: AggregatedEdge[],
   svcTotals: Map<string, { count: number; avgDurationMs: number }>,
   svcErrors: Map<string, number>,
+  realServiceNames: Set<string>,
   layoutMode: LayoutMode = "hierarchical",
 ): {
   nodes: Node<ServiceStats>[];
@@ -88,11 +89,14 @@ function buildGraph(
   for (const name of svcTotals.keys()) {
     serviceNames.add(name);
   }
+  for (const name of realServiceNames) {
+    serviceNames.add(name);
+  }
   const sorted = [...serviceNames].sort();
   const positions = layoutMode === "hierarchical"
     ? computeHierarchicalLayout(sorted, aggregated)
     : computeForceLayout(sorted, aggregated);
-  const stats = computeServiceStats(sorted, aggregated, svcTotals, svcErrors);
+  const stats = computeServiceStats(sorted, aggregated, svcTotals, svcErrors, realServiceNames);
 
   const nodes: Node<ServiceStats>[] = sorted.map((name) => {
     const pos = positions.get(name)!;
@@ -323,6 +327,7 @@ export function ServiceMapView() {
     x: number;
     y: number;
     hasErrors: boolean;
+    hasCalls: boolean;
     isImplicit: boolean;
     serviceKind: ServiceKind;
   } | null>(null);
@@ -340,6 +345,7 @@ export function ServiceMapView() {
     aggregated: AggregatedEdge[];
     svcTotals: Map<string, { count: number; avgDurationMs: number }>;
     svcErrors: Map<string, number>;
+    realServiceNames: Set<string>;
   } | null>(null);
 
   // Store sampled spans for edge operations drilldown (same data as edge counts)
@@ -512,6 +518,7 @@ export function ServiceMapView() {
         x: event.clientX,
         y: event.clientY,
         hasErrors: node.data.totalErrors > 0,
+        hasCalls: node.data.totalCalls > 0,
         isImplicit: node.data.isImplicit,
         serviceKind: node.data.serviceKind,
       });
@@ -676,9 +683,9 @@ export function ServiceMapView() {
         }
 
         // Store raw data for re-layout on mode toggle
-        graphDataRef.current = { aggregated, svcTotals, svcErrors };
+        graphDataRef.current = { aggregated, svcTotals, svcErrors, realServiceNames };
 
-        const graph = buildGraph(aggregated, svcTotals, svcErrors, layoutMode);
+        const graph = buildGraph(aggregated, svcTotals, svcErrors, realServiceNames, layoutMode);
         setNodes(graph.nodes);
         setEdges(graph.edges);
         if (layoutMode === "force") {
@@ -711,7 +718,7 @@ export function ServiceMapView() {
       const next: LayoutMode = prev === "hierarchical" ? "force" : "hierarchical";
       const data = graphDataRef.current;
       if (data) {
-        const graph = buildGraph(data.aggregated, data.svcTotals, data.svcErrors, next);
+        const graph = buildGraph(data.aggregated, data.svcTotals, data.svcErrors, data.realServiceNames, next);
         setNodes(graph.nodes);
         setEdges(graph.edges);
         if (next === "force") {
@@ -819,6 +826,7 @@ export function ServiceMapView() {
           x={contextMenu.x}
           y={contextMenu.y}
           hasErrors={contextMenu.hasErrors}
+          hasCalls={contextMenu.hasCalls}
           isImplicit={contextMenu.isImplicit}
           serviceKind={contextMenu.serviceKind}
           onClose={() => setContextMenu(null)}

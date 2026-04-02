@@ -64,6 +64,7 @@ export interface SampledSpan {
   parent_span_id: string | null;
   service_name: string;
   span_name: string;
+  span_fingerprint: string | null;
   span_kind: number;
   span_status: { code?: number } | null;
   span_duration_millis: number;
@@ -256,24 +257,27 @@ export function deriveEdgesFromTraces(spans: SampledSpan[]): AggregatedEdge[] {
         const topic = inferMessagingTopic(parent.span_attributes) ?? inferMessagingTopic(child.span_attributes);
         const system = inferMessagingSystem(parent.span_attributes) ?? inferMessagingSystem(child.span_attributes);
         const intermediary = messagingNodeName(system, topic);
-        const isError = child.span_status?.code === 2;
+        // Error attribution: based on the CLIENT/PRODUCER span's own status,
+        // not the child's. The child's errors belong to the target node.
+        const isError = parent.span_status?.code === 2;
 
         if (intermediary) {
           // Split into two async edges: source → topic, topic → dest
-          addEdgeStat(edgeStats, parent.service_name, intermediary, child.span_duration_millis, isError, "async");
-          addEdgeStat(edgeStats, intermediary, child.service_name, child.span_duration_millis, isError, "async");
+          addEdgeStat(edgeStats, parent.service_name, intermediary, parent.span_duration_millis, isError, "async");
+          addEdgeStat(edgeStats, intermediary, child.service_name, parent.span_duration_millis, isError, "async");
         } else {
           // No messaging attrs — direct async edge
-          addEdgeStat(edgeStats, parent.service_name, child.service_name, child.span_duration_millis, isError, "async");
+          addEdgeStat(edgeStats, parent.service_name, child.service_name, parent.span_duration_millis, isError, "async");
         }
       } else {
         // Synchronous edge (CLIENT → SERVER or other)
+        // Error attribution: based on the CLIENT/PRODUCER span's own status.
         addEdgeStat(
           edgeStats,
           parent.service_name,
           child.service_name,
-          child.span_duration_millis,
-          child.span_status?.code === 2,
+          parent.span_duration_millis,
+          parent.span_status?.code === 2,
         );
       }
     }
@@ -328,6 +332,7 @@ export function deriveEdgesFromTraces(spans: SampledSpan[]): AggregatedEdge[] {
 
 export interface DerivedOperation {
   spanName: string;
+  spanFingerprint: string | null;
   spanKind: number;
   count: number;
   errorCount: number;
@@ -354,7 +359,7 @@ export function deriveEdgeOperations(
     group.push(span);
   }
 
-  const opStats = new Map<string, { count: number; errors: number; totalDuration: number; spanKind: number }>();
+  const opStats = new Map<string, { count: number; errors: number; totalDuration: number; spanKind: number; fingerprint: string | null }>();
 
   for (const [, traceSpans] of traceGroups) {
     const spanById = new Map<string, SampledSpan>();
@@ -370,18 +375,21 @@ export function deriveEdgeOperations(
       if (child.service_name !== targetService) continue;
 
       // Cross-service span for this edge — group by source-side operation
+      // Error attribution: based on the CLIENT/PRODUCER span's own status.
       const key = `${parent.span_name}\0${parent.span_kind}`;
+      const isError = parent.span_status?.code === 2;
       const existing = opStats.get(key);
       if (existing) {
         existing.count += 1;
-        existing.errors += child.span_status?.code === 2 ? 1 : 0;
+        existing.errors += isError ? 1 : 0;
         existing.totalDuration += parent.span_duration_millis;
       } else {
         opStats.set(key, {
           count: 1,
-          errors: child.span_status?.code === 2 ? 1 : 0,
+          errors: isError ? 1 : 0,
           totalDuration: parent.span_duration_millis,
           spanKind: parent.span_kind,
+          fingerprint: parent.span_fingerprint,
         });
       }
     }
@@ -392,6 +400,7 @@ export function deriveEdgeOperations(
     const [spanName] = key.split("\0");
     result.push({
       spanName,
+      spanFingerprint: stats.fingerprint,
       spanKind: stats.spanKind,
       count: stats.count,
       errorCount: stats.errors,
@@ -435,11 +444,15 @@ export function computeServiceStats(
   aggregated: AggregatedEdge[],
   svcTotals: Map<string, { count: number; avgDurationMs: number }>,
   svcErrors: Map<string, number>,
+  realServiceNames: Set<string>,
 ): Map<string, ServiceStats> {
   const dests = new Set(aggregated.map((e) => e.dest));
   const roots = new Set(serviceNames.filter((n) => !dests.has(n)));
-  // Implicit = doesn't emit its own spans (not in svcTotals), only appears as an edge destination
-  const implicitLeaves = new Set(serviceNames.filter((n) => !svcTotals.has(n)));
+  // Implicit = doesn't emit its own spans (not seen in sampled traces), only
+  // appears as an edge destination inferred from peer.service / db.system.
+  // Note: svcTotals only has SERVER/CONSUMER spans, so a client-only service
+  // like a frontend would be missing from svcTotals but IS a real service.
+  const implicitLeaves = new Set(serviceNames.filter((n) => !realServiceNames.has(n)));
 
   const stats = new Map<string, ServiceStats>();
   for (const name of serviceNames) {
