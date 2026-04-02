@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { X, AlertTriangle, CircleCheck, Loader2 } from "lucide-react";
 import { searchTraces } from "@/lib/api";
 import { SPAN_KIND_SHORT, formatDuration } from "@/lib/traces";
+import { parseTimeParam, buildTimeRangeClause } from "@/lib/time";
 
 interface OperationsDrilldownProps {
   serviceName: string;
@@ -79,6 +80,7 @@ export function OperationsDrilldownPanel({
   onToggleErrorsOnly,
 }: OperationsDrilldownProps) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [operations, setOperations] = useState<OperationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -87,11 +89,14 @@ export function OperationsDrilldownPanel({
     setLoading(true);
     setError(null);
     try {
-      const base = sourceService && isImplicit
+      const timeSel = parseTimeParam(searchParams.get("time"));
+      const timeClause = buildTimeRangeClause(timeSel);
+      const serviceBase = sourceService && isImplicit
         ? `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
         : isImplicit
           ? `(span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
           : `service_name:"${serviceName}"`;
+      const base = `${timeClause} AND ${serviceBase}`;
       const errorQuery = `${base} AND span_status.code:2`;
       const okQuery = `${base} AND NOT span_status.code:2`;
 
@@ -141,6 +146,34 @@ export function OperationsDrilldownPanel({
         ? ((okRes.aggregations?.operations as TermsAgg | undefined)?.buckets ?? [])
         : [];
 
+      // Resolve any fingerprints missing from the lookup (sample hits
+      // didn't cover all agg buckets)
+      const allBuckets = [...errorBuckets, ...okBuckets];
+      const missingFps = allBuckets
+        .map((b) => b.key)
+        .filter((fp) => !fpLookup.has(fp));
+      const uniqueMissing = [...new Set(missingFps)];
+      if (uniqueMissing.length > 0) {
+        const fpClauses = uniqueMissing.map((fp) => `span_fingerprint:"${fp}"`).join(" OR ");
+        const resolveQuery = `${base} AND (${fpClauses})`;
+        try {
+          const resolveRes = await searchTraces<DrilldownSpanDoc>({
+            query: resolveQuery,
+            max_hits: uniqueMissing.length * 2,
+          });
+          for (const hit of resolveRes.hits) {
+            if (hit.span_fingerprint && !fpLookup.has(hit.span_fingerprint)) {
+              fpLookup.set(hit.span_fingerprint, {
+                spanName: hit.span_name,
+                spanKind: hit.span_kind,
+              });
+            }
+          }
+        } catch {
+          // Best-effort — fall back to hash display
+        }
+      }
+
       const rows = [
         ...bucketsToRows(errorBuckets, fpLookup, "error"),
         ...bucketsToRows(okBuckets, fpLookup, "ok"),
@@ -154,7 +187,7 @@ export function OperationsDrilldownPanel({
     } finally {
       setLoading(false);
     }
-  }, [serviceName, errorsOnly, isImplicit, sourceService]);
+  }, [serviceName, errorsOnly, isImplicit, sourceService, searchParams]);
 
   useEffect(() => {
     fetchOperations();
@@ -216,15 +249,16 @@ export function OperationsDrilldownPanel({
               op={op}
               onClick={() => {
                 const params = new URLSearchParams();
+                const fp = op.fingerprint;
                 if (isImplicit) {
                   let q = sourceService
-                    ? `service_name:"${sourceService}" AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:${op.fingerprint}`
-                    : `(span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:${op.fingerprint}`;
+                    ? `service_name:"${sourceService}" AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:"${fp}"`
+                    : `(span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:"${fp}"`;
                   if (op.status === "error") q += " AND span_status.code:2";
                   params.append("q", q);
                 } else {
                   params.append("f", `service_name:${serviceName}`);
-                  params.append("f", `span_fingerprint:${op.fingerprint}`);
+                  params.append("f", `span_fingerprint:${fp}`);
                   if (op.status === "error") {
                     params.append("f", "span_status.code:2");
                   }

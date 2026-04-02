@@ -88,6 +88,21 @@ export function computeTimeRange(sel: TimeSelection): { startMs: number; endMs: 
   return { startMs: endMs - sel.seconds * 1000, endMs };
 }
 
+/** Build a Tantivy range clause for the given time selection and timestamp field. */
+export function buildTimeRangeClause(
+  sel: TimeSelection,
+  field = "span_start_timestamp_nanos",
+): string {
+  if (sel.type === "relative") {
+    const nowNanos = BigInt(Date.now()) * 1_000_000n;
+    const startNanos = nowNanos - BigInt(sel.seconds) * 1_000_000_000n;
+    return `${field}:[${startNanos} TO ${nowNanos}]`;
+  }
+  const fromNanos = BigInt(sel.from.getTime()) * 1_000_000n;
+  const toNanos = BigInt(sel.to.getTime()) * 1_000_000n;
+  return `${field}:[${fromNanos} TO ${toNanos}]`;
+}
+
 /** "Nice" bucket intervals in milliseconds, from 1 second to 1 week. */
 const NICE_INTERVALS_MS = [
   1_000,         // 1s

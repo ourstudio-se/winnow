@@ -25,6 +25,7 @@ export interface SpanDocument {
 
 export interface TraceSummary {
   traceId: string;
+  rootSpanId: string;
   rootServiceName: string;
   rootSpanName: string;
   startTimestampNanos: number;
@@ -79,6 +80,7 @@ export function groupSpansByTrace(spans: SpanDocument[]): TraceSummary[] {
     const durationNanos = maxEnd - minStart;
     summaries.push({
       traceId,
+      rootSpanId: root.span_id,
       rootServiceName: root.service_name,
       rootSpanName: root.span_name,
       startTimestampNanos: minStart,

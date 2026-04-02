@@ -110,6 +110,7 @@ function buildGraph(
     source: e.source,
     target: e.dest,
     type: "service",
+    className: e.errorCount > 0 ? "edge-has-errors" : undefined,
     data: {
       callCount: e.callCount,
       errorCount: e.errorCount,
@@ -123,18 +124,55 @@ function buildGraph(
 
 // --- Custom node ---
 
+function ErrorArcRing({ size, errorRate, dashed }: { size: number; errorRate: number; dashed?: boolean }) {
+  const strokeWidth = 2;
+  const r = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * r;
+  const errorLen = circumference * Math.min(errorRate, 1);
+  const okLen = circumference - errorLen;
+
+  return (
+    <svg
+      width={size}
+      height={size}
+      className="absolute inset-0"
+      style={{ transform: "rotate(-90deg)" }}
+    >
+      {/* Green (ok) arc — drawn second so it starts after the red arc */}
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke="oklch(0.65 0.17 155)"
+        strokeWidth={strokeWidth}
+        strokeDasharray={dashed ? "4 3" : `${okLen} ${errorLen}`}
+        strokeDashoffset={dashed ? 0 : -errorLen}
+      />
+      {/* Red (error) arc — starts at top (12 o'clock via rotate) */}
+      {errorRate > 0 && !dashed && (
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="oklch(0.63 0.2 25)"
+          strokeWidth={strokeWidth}
+          strokeDasharray={`${errorLen} ${okLen}`}
+        />
+      )}
+    </svg>
+  );
+}
+
 function ServiceNode({ data }: NodeProps<Node<ServiceStats>>) {
   const Icon = serviceKindIcon[data.serviceKind];
 
   const errorPct =
     data.errorRate > 0 ? `${(data.errorRate * 100).toFixed(0)}%` : null;
 
-  // Threshold-based border: green < 5%, amber 5–15%, red > 15%
-  let borderColor = "border-emerald-500";
-  if (data.errorRate >= 0.15) borderColor = "border-red-500";
-  else if (data.errorRate >= 0.05) borderColor = "border-amber-500";
-
   const isImplicit = data.isImplicit;
+  const size = isImplicit ? 56 : 80; // h-14=56px, h-20=80px
 
   // Messaging topic nodes: display "holder.changes.v1" not "kafka/holder.changes.v1"
   const displayLabel = data.serviceKind === "messaging" && data.label.includes("/")
@@ -150,10 +188,11 @@ function ServiceNode({ data }: NodeProps<Node<ServiceStats>>) {
       />
       <div className="relative">
         <div
-          className={`flex flex-col items-center justify-center rounded-full border-2 bg-card shadow-md ${borderColor} ${
-            isImplicit ? "h-14 w-14 border-dashed" : "h-20 w-20"
+          className={`flex flex-col items-center justify-center rounded-full bg-card shadow-md ${
+            isImplicit ? "h-14 w-14" : "h-20 w-20"
           }`}
         >
+          <ErrorArcRing size={size} errorRate={data.errorRate} dashed={isImplicit} />
           <Icon className={`text-muted-foreground ${isImplicit ? "h-4 w-4" : "mb-0.5 h-4 w-4"}`} />
           {!isImplicit && data.totalCalls > 0 && (
             <div className="flex flex-col items-center text-[10px] leading-tight text-muted-foreground">
@@ -219,11 +258,7 @@ function ServiceEdge({
     targetPosition,
   });
 
-  const labelText = hasErrors
-    ? `${data!.callCount} · ${formatDuration(data!.avgDurationMs)} · ${data!.errorCount} err`
-    : data
-      ? `${data.callCount} · ${formatDuration(data.avgDurationMs)}`
-      : "";
+  const hasLabel = data != null && data.callCount > 0;
 
   return (
     <>
@@ -252,17 +287,19 @@ function ServiceEdge({
         interactionWidth={20}
         markerEnd={`url(#arrow-${id})`}
       />
-      {labelText && (
+      {hasLabel && (
         <EdgeLabelRenderer>
           <div
-            className="rounded-md bg-card/80 px-1.5 py-0.5 text-[10px] text-muted-foreground shadow-sm ring-1 ring-border/50"
+            className="edge-label rounded-md bg-card px-1.5 py-0.5 text-[10px] text-foreground shadow-sm ring-1 ring-border/50"
+            data-edge-id={id}
             style={{
               position: "absolute",
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
               pointerEvents: "none",
             }}
           >
-            {labelText}
+            {data.callCount} · {formatDuration(data.avgDurationMs)}
+            {hasErrors && <span className="text-red-400"> · {data.errorCount} err</span>}
           </div>
         </EdgeLabelRenderer>
       )}
@@ -425,6 +462,46 @@ export function ServiceMapView() {
     simRef.current?.alphaTarget(0);
   }, []);
 
+  // Keep a ref to current edges so hover callbacks don't go stale
+  const edgesRef = useRef(edges);
+  edgesRef.current = edges;
+
+  const onNodeMouseEnter = useCallback((_: React.MouseEvent, node: Node) => {
+    const connected = edgesRef.current.filter(
+      (e) => e.source === node.id || e.target === node.id,
+    );
+    if (connected.length === 0) return;
+
+    // Mark edges container as having highlights so CSS dims the rest
+    const container = document.querySelector(".react-flow__edges");
+    container?.classList.add("has-highlighted-edges");
+
+    for (const edge of connected) {
+      // Highlight SVG edge group (find path by id, walk up to group)
+      const pathEl = document.getElementById(edge.id);
+      const group = pathEl?.closest(".react-flow__edge");
+      group?.classList.add("edge-highlighted");
+
+      // Show label
+      const label = document.querySelector(
+        `.edge-label[data-edge-id="${CSS.escape(edge.id)}"]`,
+      ) as HTMLElement | null;
+      if (label) label.style.opacity = "1";
+    }
+  }, []);
+
+  const onNodeMouseLeave = useCallback(() => {
+    const container = document.querySelector(".react-flow__edges");
+    container?.classList.remove("has-highlighted-edges");
+
+    document.querySelectorAll(".edge-highlighted").forEach((el) =>
+      el.classList.remove("edge-highlighted"),
+    );
+    document.querySelectorAll(".edge-label").forEach((el) =>
+      (el as HTMLElement).style.opacity = "0",
+    );
+  }, []);
+
   const onNodeClick = useCallback(
     (event: React.MouseEvent, node: Node<ServiceStats>) => {
       setContextMenu({
@@ -438,6 +515,16 @@ export function ServiceMapView() {
     },
     [],
   );
+
+  const onEdgeMouseEnter = useCallback((_: React.MouseEvent, edge: Edge) => {
+    const el = document.querySelector(`.edge-label[data-edge-id="${CSS.escape(edge.id)}"]`) as HTMLElement | null;
+    if (el) el.style.opacity = "1";
+  }, []);
+
+  const onEdgeMouseLeave = useCallback((_: React.MouseEvent, edge: Edge) => {
+    const el = document.querySelector(`.edge-label[data-edge-id="${CSS.escape(edge.id)}"]`) as HTMLElement | null;
+    if (el) el.style.opacity = "0";
+  }, []);
 
   const onEdgeClick = useCallback(
     (_event: React.MouseEvent, edge: Edge<ServiceEdgeData>) => {
@@ -674,7 +761,11 @@ export function ServiceMapView() {
               onNodeDragStart={layoutMode === "force" ? onNodeDragStart : undefined}
               onNodeDrag={layoutMode === "force" ? onNodeDrag : undefined}
               onNodeDragStop={layoutMode === "force" ? onNodeDragStop : undefined}
+              onNodeMouseEnter={onNodeMouseEnter}
+              onNodeMouseLeave={onNodeMouseLeave}
               onNodeClick={onNodeClick}
+              onEdgeMouseEnter={onEdgeMouseEnter}
+              onEdgeMouseLeave={onEdgeMouseLeave}
               onEdgeClick={onEdgeClick}
               onPaneClick={onPaneClick}
               nodeTypes={nodeTypes}

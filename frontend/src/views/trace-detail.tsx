@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams, Link } from "react-router";
 import { ArrowLeft, AlertCircle, ChevronDown, ChevronRight, Map, ExternalLink, ListTree } from "lucide-react";
 import { searchTraces, searchLogs } from "@/lib/api";
@@ -492,6 +492,7 @@ export function TraceDetailView() {
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(
     () => searchParams.get("span"),
   );
+  const initialSpanId = useRef(searchParams.get("span"));
   const [collapsedSpans, setCollapsedSpans] = useState<Set<string>>(new Set());
 
   const toggleCollapse = useCallback((spanId: string) => {
@@ -681,7 +682,15 @@ export function TraceDetailView() {
         <TimeRuler durationMs={traceDurationMs} />
         <div className="flex-1 overflow-y-auto">
           {visibleTree.map((node) => (
-            <span key={node.span.span_id}>
+            <span
+              key={node.span.span_id}
+              ref={node.span.span_id === initialSpanId.current ? (el) => {
+                if (el) {
+                  initialSpanId.current = null;
+                  requestAnimationFrame(() => el.scrollIntoView({ block: "center", behavior: "smooth" }));
+                }
+              } : undefined}
+            >
               <WaterfallRow
                 node={node}
                 traceStart={traceStart}

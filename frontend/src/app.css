@@ -135,12 +135,22 @@
 .react-flow__edge .react-flow__edge-path {
   transition: stroke 0.15s, stroke-width 0.15s;
 }
-.react-flow__edges:has(.react-flow__edge:hover) .react-flow__edge:not(:hover) {
+.react-flow__edges:has(.react-flow__edge:hover) .react-flow__edge:not(:hover),
+.has-highlighted-edges .react-flow__edge:not(.edge-highlighted) {
   opacity: 0.15;
 }
-.react-flow__edge:hover .react-flow__edge-path {
+.react-flow__edge:hover .react-flow__edge-path,
+.edge-highlighted .react-flow__edge-path {
   stroke: white !important;
   stroke-width: 2 !important;
+}
+.react-flow__edge.edge-has-errors:hover .react-flow__edge-path,
+.edge-has-errors.edge-highlighted .react-flow__edge-path {
+  stroke: oklch(0.7 0.22 25) !important;
+}
+.edge-label {
+  opacity: 0;
+  transition: opacity 0.15s;
 }
 
 @layer base {

@@ -256,7 +256,7 @@ export function TracesView() {
                 {traces.map((trace) => (
                   <tr
                     key={trace.traceId}
-                    onClick={() => navigate(`/traces/${trace.traceId}`)}
+                    onClick={() => navigate(`/traces/${trace.traceId}?span=${trace.rootSpanId}`)}
                     className="cursor-pointer border-b border-border/50 hover:bg-muted/30"
                   >
                     <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
