@@ -1,40 +1,59 @@
+import { useState } from "react";
 import { Outlet } from "react-router";
-import { Separator } from "@/components/ui/separator";
 import { SidebarNav } from "@/components/sidebar-nav";
-import { SidebarPanelProvider, useSidebarPanel } from "@/lib/sidebar-context";
+import logoExpanded from "@/assets/winnow_logo_dark_expanded.png";
+import logoCollapsed from "@/assets/winnow_logo_dark_collapsed.png";
 
-export function Layout() {
-  return (
-    <SidebarPanelProvider>
-      <div className="flex h-screen">
-        <Sidebar />
-        {/* Main content */}
-        <main className="flex flex-1 flex-col overflow-hidden">
-          <Outlet />
-        </main>
-      </div>
-    </SidebarPanelProvider>
-  );
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem("winnow-sidebar-collapsed") === "true";
+  } catch {
+    return false;
+  }
 }
 
-function Sidebar() {
-  const { panelContent } = useSidebarPanel();
+export function Layout() {
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+
+  const toggle = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("winnow-sidebar-collapsed", String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r bg-card">
-      <div className="flex h-14 shrink-0 items-center border-b border-border px-4">
-        <span className="text-lg font-bold tracking-tight">Winnow</span>
-      </div>
-      <div className="flex flex-col overflow-y-auto px-3 py-3">
-        <SidebarNav />
-      </div>
-      {panelContent && (
-        <>
-          <Separator />
-          <div className="flex flex-1 flex-col overflow-y-auto px-3 py-3">
-            {panelContent}
-          </div>
-        </>
-      )}
-    </aside>
+    <div className="flex h-screen">
+      <aside
+        className={`flex shrink-0 flex-col overflow-hidden border-r bg-card transition-[width] duration-200 ${collapsed ? "w-12" : "w-56"}`}
+      >
+        <button
+          onClick={toggle}
+          className="relative h-14 shrink-0 border-b border-border overflow-hidden cursor-pointer hover:bg-accent/50 transition-colors"
+        >
+          <img
+            src={logoExpanded}
+            alt="Winnow"
+            className={`absolute inset-0 m-auto h-9 object-contain transition-opacity duration-200 ${collapsed ? "opacity-0" : "opacity-100"}`}
+          />
+          <img
+            src={logoCollapsed}
+            alt="Winnow"
+            className={`absolute inset-0 m-auto h-6 object-contain transition-opacity duration-200 ${collapsed ? "opacity-100" : "opacity-0"}`}
+          />
+        </button>
+        <div className={`flex flex-1 flex-col overflow-hidden py-3 ${collapsed ? "items-center" : "px-2"}`}>
+          <SidebarNav collapsed={collapsed} />
+        </div>
+      </aside>
+      <main className="flex flex-1 flex-col overflow-hidden">
+        <Outlet />
+      </main>
+    </div>
   );
 }

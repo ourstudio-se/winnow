@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, Link } from "react-router";
-import { ListTree, ExternalLink, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { ListTree, ExternalLink, ArrowUp, ArrowDown, ArrowUpDown, Columns3 } from "lucide-react";
 import { searchLogs } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { TimeHistogram } from "@/components/time-histogram";
@@ -24,9 +24,10 @@ import {
   PSEUDO_COLUMNS,
   PSEUDO_SORT_FIELDS,
 } from "@/lib/logs";
-import { useSidebarPanel } from "@/lib/sidebar-context";
 import { ColumnSelector } from "@/components/column-selector";
 import { ResizeHandle } from "@/components/resize-handle";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 const PAGE_SIZE = 200;
 
@@ -90,19 +91,6 @@ export function LogsView() {
     setColumns(newColumns);
     saveColumns(newColumns);
   }, []);
-
-  // Sidebar panel injection
-  const { setPanelContent } = useSidebarPanel();
-  useEffect(() => {
-    setPanelContent(
-      <ColumnSelector
-        activeColumns={columns}
-        availableData={discoveredFields}
-        onColumnsChange={handleColumnsChange}
-      />,
-    );
-    return () => setPanelContent(null);
-  }, [columns, discoveredFields, handleColumnsChange, setPanelContent]);
 
   // Resolve the base query from current filters (or the last known filters)
   const getBaseQuery = useCallback((filters?: FilterState) => {
@@ -274,7 +262,27 @@ export function LogsView() {
         index="logs"
         timestampField="timestamp_nanos"
         onFilterChange={handleFilterChange}
-        trailing={tracesLink}
+        trailing={
+          <>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground hover:text-foreground">
+                  <Columns3 className="h-3 w-3" /> Columns
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-64 p-0" sideOffset={8}>
+                <div className="max-h-96 overflow-y-auto p-3">
+                  <ColumnSelector
+                    activeColumns={columns}
+                    availableData={discoveredFields}
+                    onColumnsChange={handleColumnsChange}
+                  />
+                </div>
+              </PopoverContent>
+            </Popover>
+            {tracesLink}
+          </>
+        }
       />
       {!loading && !error && logs.length > 0 && (
         <TimeHistogram
