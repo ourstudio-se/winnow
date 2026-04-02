@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Outlet } from "react-router";
 import { SidebarNav } from "@/components/sidebar-nav";
 import logoExpanded from "@/assets/winnow_logo_dark_expanded.png";
@@ -15,7 +15,7 @@ function readCollapsed(): boolean {
 export function Layout() {
   const [collapsed, setCollapsed] = useState(readCollapsed);
 
-  const toggle = () => {
+  const toggle = useCallback(() => {
     setCollapsed((prev) => {
       const next = !prev;
       try {
@@ -25,7 +25,18 @@ export function Layout() {
       }
       return next;
     });
-  };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "b") {
+        e.preventDefault();
+        toggle();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [toggle]);
 
   return (
     <div className="flex h-screen">
