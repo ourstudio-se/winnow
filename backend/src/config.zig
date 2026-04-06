@@ -4,18 +4,27 @@ const Allocator = std.mem.Allocator;
 
 const log = std.log.scoped(.config);
 
+const default_number_of_workers_per_server = 6;
+
 pub const IndexSettings = struct {
     index_id: []const u8,
     retention: ?[]const u8 = null,
 };
 
-pub const ServeCollectorConfig = struct {};
-pub const ServeFrontendConfig = struct {};
-pub const ServeApiConfig = struct {};
+pub const ServeCollectorConfig = struct {
+    number_of_workers: usize,
+};
+pub const ServeApiConfig = struct {
+    number_of_workers: usize,
+};
 
 pub const ServeConfig = struct {
-    collector: ?ServeCollectorConfig = .{},
-    api: ?ServeApiConfig = .{},
+    collector: ?ServeCollectorConfig = .{
+        .number_of_workers = default_number_of_workers_per_server,
+    },
+    api: ?ServeApiConfig = .{
+        .number_of_workers = default_number_of_workers_per_server,
+    },
 };
 
 pub const PortsCollectorConfig = struct {
@@ -209,14 +218,23 @@ fn parseKdl(allocator: Allocator, source: []const u8, base: Config) !Config {
                     collector,
                 }, doc.getString(doc.nodes.getName(child))) orelse return error.ConfigParseError;
 
+                const number_of_workers: usize = if (getIntProp(&doc, child, "number_of_workers")) |p|
+                    std.math.cast(u16, p) orelse return error.ConfigParseError
+                else
+                    default_number_of_workers_per_server;
+
                 has_children = true;
 
                 switch (child_name) {
                     .api => {
-                        cfg.serve.api = .{};
+                        cfg.serve.api = .{
+                            .number_of_workers = number_of_workers,
+                        };
                     },
                     .collector => {
-                        cfg.serve.collector = .{};
+                        cfg.serve.collector = .{
+                            .number_of_workers = number_of_workers,
+                        };
                     },
                 }
             }

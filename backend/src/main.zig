@@ -1,34 +1,33 @@
-const std = @import("std");
-const net = std.net;
-const http = std.http;
 const Allocator = std.mem.Allocator;
-const otlp = @import("proto/opentelemetry/proto/collector/trace/v1.pb.zig");
-const logs_otlp = @import("proto/opentelemetry/proto/collector/logs/v1.pb.zig");
+const IndexConfig = api.IndexConfig;
 const Quickwit = @import("quickwit.zig").Quickwit;
-const otel_index = @import("otel_index.zig");
-const otel_logs_index = @import("otel_logs_index.zig");
+const Server = @import("server.zig");
+const api = @import("api.zig");
+const config_mod = @import("config.zig");
+const http = std.http;
 const index_schema = @import("index_schema.zig");
 const ingest = @import("ingest.zig");
-const api = @import("api.zig");
-const static_assets = @import("static_assets.zig");
-
-const IndexConfig = api.IndexConfig;
-
-const ServerRoles = packed struct {
-    api: bool = false,
-    collector: bool = false,
-};
-
-const Context = struct {
-    qw: Quickwit,
-    allocator: Allocator,
-    indexes: IndexConfig,
-    roles: ServerRoles,
-    port: u16,
-};
-
-const config_mod = @import("config.zig");
+const logs_otlp = @import("proto/opentelemetry/proto/collector/logs/v1.pb.zig");
+const net = std.net;
+const otel_index = @import("otel_index.zig");
+const otel_logs_index = @import("otel_logs_index.zig");
+const otlp = @import("proto/opentelemetry/proto/collector/trace/v1.pb.zig");
 const schema_validation = @import("schema_validation.zig");
+const static_assets = @import("static_assets.zig");
+const std = @import("std");
+
+var servers_by_port: std.hash_map.AutoHashMap(u16, *Server) = undefined;
+
+fn sigHandler(sig: i32) callconv(.c) void {
+    std.log.debug("handling graceful shutdown", .{});
+    if (sig == std.posix.SIG.INT) {
+        std.log.debug("handling INT", .{});
+        var servers_it = servers_by_port.valueIterator();
+        while (servers_it.next()) |server_ptr| {
+            server_ptr.*.close();
+        }
+    }
+}
 
 fn ensureOrValidateIndex(
     arena: Allocator,
@@ -89,24 +88,36 @@ fn ensureOrValidateIndex(
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa: std.heap.DebugAllocator(.{ .stack_trace_frames = 20 }) = .init;
+    defer {
+        std.log.debug("deiniting allocator", .{});
+        _ = gpa.deinit();
+    }
     const allocator = gpa.allocator();
 
     // Parse CLI args and load config
     const cli = config_mod.parseCli(allocator) catch {
         return;
     };
-    defer if (cli.config_path) |p| allocator.free(p);
+    defer {
+        std.log.debug("deiniting config path", .{});
+        if (cli.config_path) |p| allocator.free(p);
+    }
 
     const cfg = config_mod.load(allocator, cli.config_path, cli.explicit) catch |err| {
         std.log.err("failed to load config: {}", .{err});
         return err;
     };
-    defer cfg.deinit(allocator);
+    defer {
+        std.log.debug("deiniting config", .{});
+        cfg.deinit(allocator);
+    }
 
     var http_client: http.Client = .{ .allocator = allocator };
-    defer http_client.deinit();
+    defer {
+        std.log.debug("deiniting http client", .{});
+        http_client.deinit();
+    }
 
     // Determine serving topology from config
     const serve = cfg.serve;
@@ -138,207 +149,68 @@ pub fn main() !void {
         .logs = cfg.logs.index_id,
     };
 
-    var contextsByPort = std.hash_map.AutoHashMap(u16, Context).init(allocator);
-    defer contextsByPort.deinit();
+    servers_by_port = std.hash_map.AutoHashMap(u16, *Server).init(allocator);
+
+    var graceful_shutdown: std.posix.Sigaction = .{
+        .handler = .{ .handler = sigHandler },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.posix.SA.RESTART,
+    };
+
+    std.posix.sigaction(std.posix.SIG.INT, &graceful_shutdown, null);
+
+    defer {
+        std.log.info("deiniting servers hashmap", .{});
+
+        var it = servers_by_port.valueIterator();
+        while (it.next()) |server| {
+            server.*.destroy();
+        }
+
+        servers_by_port.deinit();
+    }
 
     if (serve.api != null) {
-        if (contextsByPort.getPtr(api_port)) |context| {
-            context.roles.api = true;
+        if (servers_by_port.get(api_port)) |server| {
+            server.opts.roles.api = true;
         } else {
-            try contextsByPort.put(api_port, Context{
-                .qw = qw,
-                .allocator = allocator,
-                .indexes = indexes,
-                .roles = .{ .api = true },
+            const server = try Server.create(allocator, .{
+                .indices = indexes,
+                .number_of_workers = 6,
                 .port = api_port,
+                .qw = qw,
+                .roles = .{ .api = true },
             });
+            try servers_by_port.put(api_port, server);
         }
     }
 
     if (serve.collector != null) {
-        if (contextsByPort.getPtr(collector_port)) |context| {
-            context.roles.collector = true;
+        if (servers_by_port.get(collector_port)) |server| {
+            server.opts.roles.collector = true;
         } else {
-            try contextsByPort.put(collector_port, Context{
-                .qw = qw,
-                .allocator = allocator,
-                .indexes = indexes,
-                .roles = .{ .collector = true },
+            const server = try Server.create(allocator, .{
+                .indices = indexes,
+                .number_of_workers = 6,
                 .port = collector_port,
+                .qw = qw,
+                .roles = .{ .collector = true },
             });
+            try servers_by_port.put(collector_port, server);
         }
     }
 
     var wg = std.Thread.WaitGroup{};
 
-    var ctxIterator = contextsByPort.iterator();
+    var server_iterator = servers_by_port.valueIterator();
 
-    var servers: [3]net.Server = undefined;
-    var serversCount: usize = 0;
-
-    defer {
-        for (0..serversCount) |i| {
-            servers[i].deinit();
-        }
-    }
-
-    while (ctxIterator.next()) |entry| {
-        const port: u16 = entry.key_ptr.*;
-        const ctx = entry.value_ptr;
-        const address = net.Address.parseIp("0.0.0.0", port) catch unreachable;
-
-        servers[serversCount] = try address.listen(.{ .reuse_address = true });
-
-        const serverPtr = &servers[serversCount];
-
-        serversCount += 1;
-
-        var roleAl = try std.ArrayList(u8).initCapacity(allocator, 255);
-        defer roleAl.deinit(allocator);
-
-        if (ctx.roles.api) {
-            try roleAl.appendSlice(allocator, "api");
-        }
-
-        if (ctx.roles.collector) {
-            if (roleAl.items.len > 0) {
-                try roleAl.appendSlice(allocator, " + ");
-            }
-            try roleAl.appendSlice(allocator, "collector");
-        }
-
-        const rolestr = try roleAl.toOwnedSlice(allocator);
-        defer allocator.free(rolestr);
-
-        std.log.info("{s} listening on http://0.0.0.0:{d}", .{ rolestr, port });
-
-        wg.spawnManager(acceptLoop, .{ serverPtr, ctx });
+    while (server_iterator.next()) |serverPtr| {
+        wg.spawnManager(Server.run, .{serverPtr.*});
     }
 
     wg.wait();
 
     std.log.info("closing server", .{});
-}
-
-fn acceptLoop(server: *net.Server, ctx: *const Context) void {
-    while (true) {
-        const conn = server.accept() catch |err| {
-            std.log.err("accept error: {}", .{err});
-            continue;
-        };
-        _ = std.Thread.spawn(.{}, handleConnection, .{ conn, ctx }) catch |err| {
-            std.log.err("failed to spawn thread: {}", .{err});
-            continue;
-        };
-    }
-}
-
-fn handleConnection(conn: net.Server.Connection, ctx: *const Context) void {
-    defer conn.stream.close();
-
-    var read_buf: [8192]u8 = undefined;
-    var write_buf: [8192]u8 = undefined;
-    var reader = net.Stream.Reader.init(conn.stream, &read_buf);
-    var writer = net.Stream.Writer.init(conn.stream, &write_buf);
-    var http_server = http.Server.init(reader.interface(), &writer.interface);
-
-    var request = http_server.receiveHead() catch |err| {
-        std.log.err("failed to receive request: {}", .{err});
-        return;
-    };
-
-    // Per-request arena
-    var arena = std.heap.ArenaAllocator.init(ctx.allocator);
-    defer arena.deinit();
-
-    std.log.debug("request received - {s}, ctx: {}", .{ request.head.target, ctx.roles });
-
-    // Route (gated by server role)
-    const role = ctx.roles;
-    if (std.mem.eql(u8, request.head.target, "/v1/traces")) {
-        if (!role.collector) return sendNotFound(&request);
-        if (request.head.method == .POST) {
-            ingest.handleTraces(&request, arena.allocator(), ctx.qw, ctx.indexes.traces) catch |err| {
-                std.log.err("ingest error: {}", .{err});
-            };
-        } else {
-            request.respond("Method Not Allowed\n", .{
-                .status = .method_not_allowed,
-                .extra_headers = &.{
-                    .{ .name = "content-type", .value = "text/plain" },
-                },
-            }) catch {};
-        }
-    } else if (std.mem.eql(u8, request.head.target, "/v1/logs")) {
-        if (!role.collector) return sendNotFound(&request);
-        if (request.head.method == .POST) {
-            ingest.handleLogs(&request, arena.allocator(), ctx.qw, ctx.indexes.logs) catch |err| {
-                std.log.err("log ingest error: {}", .{err});
-            };
-        } else {
-            request.respond("Method Not Allowed\n", .{
-                .status = .method_not_allowed,
-                .extra_headers = &.{
-                    .{ .name = "content-type", .value = "text/plain" },
-                },
-            }) catch {};
-        }
-    } else if (std.mem.startsWith(u8, request.head.target, "/api/")) {
-        if (!role.api) return sendNotFound(&request);
-        api.handleApi(&request, arena.allocator(), ctx.qw, &ctx.indexes) catch |err| {
-            std.log.err("api error: {}", .{err});
-        };
-    } else {
-        if (!role.api) return sendNotFound(&request);
-        handleStatic(&request) catch |err| {
-            std.log.err("static error: {}", .{err});
-        };
-    }
-}
-
-fn sendNotFound(request: *http.Server.Request) void {
-    request.respond("Not Found\n", .{
-        .status = .not_found,
-        .extra_headers = &.{
-            .{ .name = "content-type", .value = "text/plain" },
-        },
-    }) catch {};
-}
-
-fn handleStatic(request: *http.Server.Request) !void {
-    // Strip query string for lookup
-    const target = request.head.target;
-    const path = if (std.mem.indexOfScalar(u8, target, '?')) |i| target[0..i] else target;
-
-    if (static_assets.lookup(path)) |asset| {
-        const cache_header: http.Header = if (asset.cacheable)
-            .{ .name = "cache-control", .value = "public, max-age=31536000, immutable" }
-        else
-            .{ .name = "cache-control", .value = "no-cache" };
-        try request.respond(asset.content, .{
-            .extra_headers = &.{
-                .{ .name = "content-type", .value = asset.content_type },
-                cache_header,
-            },
-        });
-    } else {
-        // SPA fallback: serve index.html for unrecognized paths (client-side routing)
-        if (static_assets.lookup("/")) |index| {
-            try request.respond(index.content, .{
-                .extra_headers = &.{
-                    .{ .name = "content-type", .value = "text/html" },
-                    .{ .name = "cache-control", .value = "no-cache" },
-                },
-            });
-        } else {
-            try request.respond("Not Found\n", .{
-                .status = .not_found,
-                .extra_headers = &.{
-                    .{ .name = "content-type", .value = "text/plain" },
-                },
-            });
-        }
-    }
 }
 
 test "static asset lookup" {
@@ -365,6 +237,7 @@ test "otlp log proto types are importable" {
 
 test {
     _ = Quickwit;
+    _ = Server;
     _ = otel_index;
     _ = otel_logs_index;
     _ = index_schema;
