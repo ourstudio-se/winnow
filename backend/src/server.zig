@@ -9,8 +9,6 @@ const ServerRoles = packed struct {
     collector: bool = false,
 };
 
-const Context = struct {};
-
 fn Queue(T: type) type {
     return struct {
         const Self = @This();
@@ -90,10 +88,8 @@ fn Queue(T: type) type {
             defer queue.m.unlock();
 
             while (queue.head == null) {
+                if (queue.closed.load(.acquire)) return null;
                 queue.cond.wait(&queue.m);
-                if (queue.closed.load(.acquire)) {
-                    return null;
-                }
             }
 
             const head = queue.head.?;
@@ -201,7 +197,6 @@ const ServerOpts = struct {
 };
 
 allocator: std.mem.Allocator,
-listener: ?std.net.Server = null,
 opts: ServerOpts,
 queue: *Queue(std.net.Server.Connection),
 workers: []Worker,
@@ -209,7 +204,6 @@ workers: []Worker,
 pub fn init(allocator: std.mem.Allocator, opts: ServerOpts, queue: *Queue(std.net.Server.Connection), workers: []Worker) Server {
     return Server{
         .allocator = allocator,
-        .listener = null,
         .opts = opts,
         .queue = queue,
         .workers = workers,
@@ -241,40 +235,41 @@ pub fn destroy(server: *Server) void {
 pub fn close(server: *Server) void {
     std.log.debug("[THREAD {d}] Closing server for port {d}...", .{ std.Thread.getCurrentId(), server.opts.port });
     server.queue.close();
-    server.listener.?.deinit();
 }
 
 pub fn listen(server: *Server) !std.net.Server {
-    const address = std.net.Address.parseIp("0.0.0.0", server.opts.port) catch unreachable;
-    server.listener = try address.listen(.{ .reuse_address = true });
+    {
+        // Log what we are doing
+        var roleAl = try std.ArrayList(u8).initCapacity(server.allocator, 255);
+        defer roleAl.deinit(server.allocator);
 
-    var roleAl = try std.ArrayList(u8).initCapacity(server.allocator, 255);
-    defer roleAl.deinit(server.allocator);
-
-    if (server.opts.roles.api) {
-        try roleAl.appendSlice(server.allocator, "api");
-    }
-
-    if (server.opts.roles.collector) {
-        if (roleAl.items.len > 0) {
-            try roleAl.appendSlice(server.allocator, " + ");
+        if (server.opts.roles.api) {
+            try roleAl.appendSlice(server.allocator, "api");
         }
-        try roleAl.appendSlice(server.allocator, "collector");
+
+        if (server.opts.roles.collector) {
+            if (roleAl.items.len > 0) {
+                try roleAl.appendSlice(server.allocator, " + ");
+            }
+            try roleAl.appendSlice(server.allocator, "collector");
+        }
+
+        const rolestr = try roleAl.toOwnedSlice(server.allocator);
+        defer server.allocator.free(rolestr);
+
+        std.log.info("{s} listening on http://0.0.0.0:{d}", .{ rolestr, server.opts.port });
     }
 
-    const rolestr = try roleAl.toOwnedSlice(server.allocator);
-    defer server.allocator.free(rolestr);
-
-    std.log.info("{s} listening on http://0.0.0.0:{d}", .{ rolestr, server.opts.port });
-
-    return server.listener.?;
+    const address = std.net.Address.parseIp("0.0.0.0", server.opts.port) catch unreachable;
+    return address.listen(.{ .reuse_address = true });
 }
 
 pub fn run(server: *Server) void {
-    var listener = server.listener orelse server.listen() catch |err| {
+    var listener = server.listen() catch |err| {
         std.log.err("failed to listen to addr: {}", .{err});
         @panic("unrecoverable error in server init");
     };
+    defer listener.deinit();
 
     var pool: std.Thread.Pool = undefined;
 
@@ -296,8 +291,23 @@ pub fn run(server: *Server) void {
     }
 
     mainloop: while (true) {
+        var poll_fd: [1]std.posix.pollfd = .{.{
+            .fd = listener.stream.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+
+        const connection_ready = std.posix.poll(&poll_fd, 100) catch |err| {
+            std.log.err("polling error: {}", .{err});
+            continue :mainloop;
+        } > 0;
+
         if (server.queue.closed.load(.acquire)) {
             break :mainloop;
+        }
+
+        if (!connection_ready) {
+            continue :mainloop;
         }
 
         const conn = listener.accept() catch |err| {
@@ -305,15 +315,20 @@ pub fn run(server: *Server) void {
             continue;
         };
 
-        server.queue.push(conn) catch |err| switch (err) {
-            error.QueueClosed => {
-                std.log.debug("[THREAD {d}] Queue is closed, gracefully exit server", .{std.Thread.getCurrentId()});
-                break :mainloop;
-            },
-            else => {
-                std.log.err("failed to push request to queue: {}", .{err});
-                break :mainloop;
-            },
+        server.queue.push(conn) catch |err| {
+            // Since no worker has handled the connection, we need to close it here
+            conn.stream.close();
+
+            switch (err) {
+                error.QueueClosed => {
+                    std.log.debug("[THREAD {d}] Queue is closed, gracefully exit server", .{std.Thread.getCurrentId()});
+                    break :mainloop;
+                },
+                else => {
+                    std.log.err("failed to push request to queue: {}", .{err});
+                    break :mainloop;
+                },
+            }
         };
     }
 

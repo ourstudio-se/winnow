@@ -17,16 +17,10 @@ const static_assets = @import("static_assets.zig");
 const std = @import("std");
 
 var servers_by_port: std.hash_map.AutoHashMap(u16, *Server) = undefined;
+var shutting_down = std.atomic.Value(bool).init(false);
 
-fn sigHandler(sig: i32) callconv(.c) void {
-    std.log.debug("handling graceful shutdown", .{});
-    if (sig == std.posix.SIG.INT) {
-        std.log.debug("handling INT", .{});
-        var servers_it = servers_by_port.valueIterator();
-        while (servers_it.next()) |server_ptr| {
-            server_ptr.*.close();
-        }
-    }
+fn handleSIGINT(_: i32) callconv(.c) void {
+    shutting_down.store(true, .release);
 }
 
 fn ensureOrValidateIndex(
@@ -152,7 +146,7 @@ pub fn main() !void {
     servers_by_port = std.hash_map.AutoHashMap(u16, *Server).init(allocator);
 
     var graceful_shutdown: std.posix.Sigaction = .{
-        .handler = .{ .handler = sigHandler },
+        .handler = .{ .handler = handleSIGINT },
         .mask = std.posix.sigemptyset(),
         .flags = std.posix.SA.RESTART,
     };
@@ -170,34 +164,35 @@ pub fn main() !void {
         servers_by_port.deinit();
     }
 
-    if (serve.api != null) {
-        if (servers_by_port.get(api_port)) |server| {
-            server.opts.roles.api = true;
-        } else {
-            const server = try Server.create(allocator, .{
-                .indices = indexes,
-                .number_of_workers = 6,
-                .port = api_port,
-                .qw = qw,
-                .roles = .{ .api = true },
-            });
-            try servers_by_port.put(api_port, server);
-        }
+    if (serve.api) |serve_api_cfg| {
+        const server = try Server.create(allocator, .{
+            .indices = indexes,
+            .number_of_workers = serve_api_cfg.number_of_workers,
+            .port = api_port,
+            .qw = qw,
+            .roles = .{ .api = true },
+        });
+        try servers_by_port.put(api_port, server);
     }
 
-    if (serve.collector != null) {
-        if (servers_by_port.get(collector_port)) |server| {
-            server.opts.roles.collector = true;
-        } else {
-            const server = try Server.create(allocator, .{
-                .indices = indexes,
-                .number_of_workers = 6,
-                .port = collector_port,
-                .qw = qw,
-                .roles = .{ .collector = true },
-            });
-            try servers_by_port.put(collector_port, server);
+    if (serve.collector) |serve_collector_cfg| {
+        if (servers_by_port.contains(collector_port)) {
+            // TODO(2026-04-06, Max Bolotin): We probably want to implement port sharing at some point,
+            // but we want to do it right - no kernel level random "load balancing". The right abstraction
+            // is likely multiple queues/worker groups per server. A later problem.
+
+            std.log.err("Config error: Sharing of the same port number between services is currently forbidden!", .{});
+            return;
         }
+
+        const server = try Server.create(allocator, .{
+            .indices = indexes,
+            .number_of_workers = serve_collector_cfg.number_of_workers,
+            .port = collector_port,
+            .qw = qw,
+            .roles = .{ .collector = true },
+        });
+        try servers_by_port.put(collector_port, server);
     }
 
     var wg = std.Thread.WaitGroup{};
@@ -206,6 +201,18 @@ pub fn main() !void {
 
     while (server_iterator.next()) |serverPtr| {
         wg.spawnManager(Server.run, .{serverPtr.*});
+    }
+
+    while (true) {
+        if (shutting_down.load(.acquire)) {
+            var servers_it = servers_by_port.valueIterator();
+            while (servers_it.next()) |server_ptr| {
+                server_ptr.*.close();
+            }
+
+            break;
+        }
+        std.posix.nanosleep(0, 100_000_000);
     }
 
     wg.wait();
