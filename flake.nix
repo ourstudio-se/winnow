@@ -145,7 +145,7 @@
           # Generate protobuf Zig code and embed frontend assets before the main build
           preBuild = ''
             # Link frontend dist for @embedFile resolution
-            ln -s ${self.packages.${system}.frontend} src/frontend-dist
+            ln -s ${self.packages.${system}.frontend} src/server/frontend-dist
 
             # Generate static asset embedding module
             bash ${embed-frontend} src/server/frontend-dist src/server/static_assets.zig

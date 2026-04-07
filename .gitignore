@@ -10,5 +10,5 @@ zig-out
 backend/src/proto/
 
 # Generated frontend asset embedding (regenerate with: scripts/embed-frontend.sh)
-backend/src/static_assets.zig
-backend/src/frontend-dist
+backend/src/server/static_assets.zig
+backend/src/server/frontend-dist
