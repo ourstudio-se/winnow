@@ -158,6 +158,8 @@
           checkPhase = ''
             zig build test --system "$ZIG_GLOBAL_CACHE_DIR/p"
           '';
+
+          meta.mainProgram = "winnow";
         };
 
         devShells.default = pkgs.mkShell {

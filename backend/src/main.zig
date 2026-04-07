@@ -139,7 +139,7 @@ pub fn main() !void {
         .logs = cfg.logs.index_id,
     };
 
-    servers_by_port = std.hash_map.AutoHashMap(u16, *Server).init(allocator);
+    servers_by_port = .init(allocator);
 
     var graceful_shutdown: std.posix.Sigaction = .{
         .handler = .{ .handler = handleSigInt },
