@@ -3,7 +3,7 @@ const api = @import("../api.zig");
 const ingest = @import("../ingest.zig");
 const Quickwit = @import("../quickwit.zig").Quickwit;
 const static_assets = @import("static_assets.zig");
-const thread_safe_queue = @import("../thread_safe_queue.zig");
+const tsq = @import("../thread_safe_queue.zig");
 const Worker = @import("worker.zig");
 
 const ServerRoles = packed struct {
@@ -23,10 +23,10 @@ const ServerOpts = struct {
 
 allocator: std.mem.Allocator,
 opts: ServerOpts,
-queue: *thread_safe_queue.ThreadSafeQueue(std.net.Server.Connection),
+queue: *tsq.ThreadSafeQueue(std.net.Server.Connection),
 workers: []Worker,
 
-pub fn init(allocator: std.mem.Allocator, opts: ServerOpts, queue: *thread_safe_queue.ThreadSafeQueue(std.net.Server.Connection), workers: []Worker) Server {
+pub fn init(allocator: std.mem.Allocator, opts: ServerOpts, queue: *tsq.ThreadSafeQueue(std.net.Server.Connection), workers: []Worker) Server {
     return Server{
         .allocator = allocator,
         .opts = opts,
@@ -37,7 +37,7 @@ pub fn init(allocator: std.mem.Allocator, opts: ServerOpts, queue: *thread_safe_
 
 pub fn create(allocator: std.mem.Allocator, opts: ServerOpts) error{OutOfMemory}!*Server {
     const server = try allocator.create(Server);
-    const queue = try thread_safe_queue.ThreadSafeQueue(std.net.Server.Connection).create(allocator);
+    const queue = try tsq.ThreadSafeQueue(std.net.Server.Connection).create(allocator);
     const workers = try allocator.alloc(Worker, opts.number_of_workers);
 
     for (0..opts.number_of_workers) |i| {
@@ -96,23 +96,11 @@ pub fn run(server: *Server) void {
     };
     defer listener.deinit();
 
-    var pool: std.Thread.Pool = undefined;
-
-    pool.init(.{
-        .allocator = server.allocator,
-        .n_jobs = server.opts.number_of_workers,
-    }) catch |err| {
-        std.log.err("failed to init server thread pool: {}", .{err});
-        @panic("unrecoverable error in server init");
-    };
-
-    defer pool.deinit();
-
     var wg: std.Thread.WaitGroup = .{};
     defer wg.wait();
 
     for (server.workers) |*worker| {
-        pool.spawnWg(&wg, Worker.run, .{worker});
+        wg.spawnManager(Worker.run, .{worker});
     }
 
     mainloop: while (true) {
@@ -173,7 +161,7 @@ test "static asset lookup" {
 }
 
 test {
-    _ = thread_safe_queue.ThreadSafeQueue(std.net.Server.Connection);
+    _ = tsq.ThreadSafeQueue(std.net.Server.Connection);
     _ = Worker;
     _ = Server;
 }
