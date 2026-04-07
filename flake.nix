@@ -148,7 +148,7 @@
             ln -s ${self.packages.${system}.frontend} src/frontend-dist
 
             # Generate static asset embedding module
-            bash ${embed-frontend} src/frontend-dist src/static_assets.zig
+            bash ${embed-frontend} src/server/frontend-dist src/server/static_assets.zig
 
             # Generate protobuf code
             zig build gen-proto --system "$ZIG_GLOBAL_CACHE_DIR/p"

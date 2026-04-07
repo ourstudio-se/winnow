@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    // b.release_mode = .fast;
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -28,7 +30,6 @@ pub fn build(b: *std.Build) void {
                 .module = protobuf_dep.module("protobuf"),
             }},
         }),
-        .use_llvm = true,
     });
 
     const mkdir = b.addSystemCommand(&.{ "mkdir", "-p", "src/proto" });
@@ -66,7 +67,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
     exe_mod.addImport("kdl", kdl_dep.module("kdl"));
 
-    const exe = b.addExecutable(.{ .name = "winnow", .root_module = exe_mod, .use_llvm = true });
+    const exe = b.addExecutable(.{ .name = "winnow", .root_module = exe_mod });
 
     b.installArtifact(exe);
 

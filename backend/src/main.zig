@@ -1,7 +1,7 @@
 const Allocator = std.mem.Allocator;
 const IndexConfig = api.IndexConfig;
 const Quickwit = @import("quickwit.zig").Quickwit;
-const Server = @import("server.zig");
+const Server = @import("server/server.zig");
 const api = @import("api.zig");
 const config_mod = @import("config.zig");
 const http = std.http;
@@ -13,13 +13,12 @@ const otel_index = @import("otel_index.zig");
 const otel_logs_index = @import("otel_logs_index.zig");
 const otlp = @import("proto/opentelemetry/proto/collector/trace/v1.pb.zig");
 const schema_validation = @import("schema_validation.zig");
-const static_assets = @import("static_assets.zig");
 const std = @import("std");
 
 var servers_by_port: std.hash_map.AutoHashMap(u16, *Server) = undefined;
 var shutting_down = std.atomic.Value(bool).init(false);
 
-fn handleSIGINT(_: i32) callconv(.c) void {
+fn handleSigInt(_: i32) callconv(.c) void {
     shutting_down.store(true, .release);
 }
 
@@ -82,7 +81,7 @@ fn ensureOrValidateIndex(
 }
 
 pub fn main() !void {
-    var gpa: std.heap.DebugAllocator(.{ .stack_trace_frames = 20 }) = .init;
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer {
         std.log.debug("deiniting allocator", .{});
         _ = gpa.deinit();
@@ -135,10 +134,7 @@ pub fn main() !void {
         try ensureOrValidateIndex(arena.allocator(), qw, cfg.logs.index_id, otel_logs_index.schema, cfg.logs.retention);
     }
 
-    const api_port = cfg.ports.api.http;
-    const collector_port = cfg.ports.collector.http;
-
-    const indexes = IndexConfig{
+    const indices = IndexConfig{
         .traces = cfg.traces.index_id,
         .logs = cfg.logs.index_id,
     };
@@ -146,7 +142,7 @@ pub fn main() !void {
     servers_by_port = std.hash_map.AutoHashMap(u16, *Server).init(allocator);
 
     var graceful_shutdown: std.posix.Sigaction = .{
-        .handler = .{ .handler = handleSIGINT },
+        .handler = .{ .handler = handleSigInt },
         .mask = std.posix.sigemptyset(),
         .flags = std.posix.SA.RESTART,
     };
@@ -154,7 +150,7 @@ pub fn main() !void {
     std.posix.sigaction(std.posix.SIG.INT, &graceful_shutdown, null);
 
     defer {
-        std.log.info("deiniting servers hashmap", .{});
+        std.log.debug("deiniting servers hashmap", .{});
 
         var it = servers_by_port.valueIterator();
         while (it.next()) |server| {
@@ -166,17 +162,17 @@ pub fn main() !void {
 
     if (serve.api) |serve_api_cfg| {
         const server = try Server.create(allocator, .{
-            .indices = indexes,
+            .indices = indices,
             .number_of_workers = serve_api_cfg.number_of_workers,
-            .port = api_port,
+            .port = serve_api_cfg.http_port,
             .qw = qw,
             .roles = .{ .api = true },
         });
-        try servers_by_port.put(api_port, server);
+        try servers_by_port.put(serve_api_cfg.http_port, server);
     }
 
     if (serve.collector) |serve_collector_cfg| {
-        if (servers_by_port.contains(collector_port)) {
+        if (servers_by_port.contains(serve_collector_cfg.http_port)) {
             // TODO(2026-04-06, Max Bolotin): We probably want to implement port sharing at some point,
             // but we want to do it right - no kernel level random "load balancing". The right abstraction
             // is likely multiple queues/worker groups per server. A later problem.
@@ -186,13 +182,13 @@ pub fn main() !void {
         }
 
         const server = try Server.create(allocator, .{
-            .indices = indexes,
+            .indices = indices,
             .number_of_workers = serve_collector_cfg.number_of_workers,
-            .port = collector_port,
+            .port = serve_collector_cfg.http_port,
             .qw = qw,
             .roles = .{ .collector = true },
         });
-        try servers_by_port.put(collector_port, server);
+        try servers_by_port.put(serve_collector_cfg.http_port, server);
     }
 
     var wg = std.Thread.WaitGroup{};
@@ -205,31 +201,21 @@ pub fn main() !void {
 
     while (true) {
         if (shutting_down.load(.acquire)) {
-            var servers_it = servers_by_port.valueIterator();
-            while (servers_it.next()) |server_ptr| {
-                server_ptr.*.close();
-            }
-
             break;
         }
         std.posix.nanosleep(0, 100_000_000);
     }
 
+    // Tell server threads to close gracefully
+    var servers_it = servers_by_port.valueIterator();
+    while (servers_it.next()) |server_ptr| {
+        server_ptr.*.close();
+    }
+
+    // Wait for server threads to clean up
     wg.wait();
 
-    std.log.info("closing server", .{});
-}
-
-test "static asset lookup" {
-    // Verify the lookup function exists and returns null for unknown paths
-    const result = static_assets.lookup("/nonexistent");
-    try std.testing.expect(result == null);
-
-    // Root should resolve to index.html
-    const root = static_assets.lookup("/");
-    try std.testing.expect(root != null);
-    try std.testing.expectEqualStrings("text/html", root.?.content_type);
-    try std.testing.expect(!root.?.cacheable);
+    std.log.debug("exiting main thread", .{});
 }
 
 test "otlp proto types are importable" {
