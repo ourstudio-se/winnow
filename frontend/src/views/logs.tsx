@@ -4,7 +4,7 @@ import { ListTree, ExternalLink, ArrowUp, ArrowDown, ArrowUpDown, Columns3 } fro
 import { searchLogs } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { TimeHistogram } from "@/components/time-histogram";
-import { serializeTimeParam } from "@/lib/time";
+import { serializeTimeParam, nanosToRfc3339 } from "@/lib/time";
 import { formatTimestamp } from "@/lib/traces";
 import {
   type LogDocument,
@@ -139,10 +139,11 @@ export function LogsView() {
       if (!sortField) {
         // Default sort (timestamp desc): use cursor-based pagination
         const lastTs = logs[logs.length - 1].timestamp_nanos;
+        const lastTsRfc = nanosToRfc3339(lastTs);
         const base = getBaseQuery();
         const cursorQuery = base === "*"
-          ? `timestamp_nanos:<${lastTs}`
-          : `${base} AND timestamp_nanos:<${lastTs}`;
+          ? `timestamp_nanos:<${lastTsRfc}`
+          : `${base} AND timestamp_nanos:<${lastTsRfc}`;
         res = await searchLogs<LogDocument>({
           query: cursorQuery,
           max_hits: PAGE_SIZE,

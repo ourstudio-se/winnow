@@ -8,12 +8,16 @@ pub const FieldMapping = struct {
     tokenizer: ?[]const u8 = null,
     fast: ?bool = null,
     indexed: ?bool = null,
+    input_formats: ?[]const []const u8 = null,
+    output_format: ?[]const u8 = null,
+    fast_precision: ?[]const u8 = null,
 };
 
 pub const IndexSchema = struct {
     field_mappings: []const FieldMapping,
     tag_fields: []const []const u8,
     default_search_fields: []const []const u8,
+    timestamp_field: ?[]const u8 = null,
 };
 
 /// Build Quickwit index config JSON at runtime.
@@ -70,10 +74,41 @@ pub fn buildIndexConfig(
             }
         }
 
+        if (fm.input_formats) |formats| {
+            try w.writeAll(",\"input_formats\":[");
+            for (formats, 0..) |fmt, fi| {
+                if (fi > 0) try w.writeByte(',');
+                try w.writeByte('"');
+                try w.writeAll(fmt);
+                try w.writeByte('"');
+            }
+            try w.writeByte(']');
+        }
+
+        if (fm.output_format) |fmt| {
+            try w.writeAll(",\"output_format\":\"");
+            try w.writeAll(fmt);
+            try w.writeByte('"');
+        }
+
+        if (fm.fast_precision) |prec| {
+            try w.writeAll(",\"fast_precision\":\"");
+            try w.writeAll(prec);
+            try w.writeByte('"');
+        }
+
         try w.writeByte('}');
     }
 
-    try w.writeAll("]},\"indexing_settings\":{\"commit_timeout_secs\":5},\"search_settings\":{\"default_search_fields\":[");
+    try w.writeAll("]");
+
+    if (schema.timestamp_field) |tsf| {
+        try w.writeAll(",\"timestamp_field\":\"");
+        try w.writeAll(tsf);
+        try w.writeByte('"');
+    }
+
+    try w.writeAll("},\"indexing_settings\":{\"commit_timeout_secs\":5},\"search_settings\":{\"default_search_fields\":[");
 
     for (schema.default_search_fields, 0..) |sf, i| {
         if (i > 0) try w.writeByte(',');
@@ -122,6 +157,43 @@ test "buildIndexConfig minimal" {
 
     // No retention block
     try std.testing.expect(root.get("retention") == null);
+}
+
+test "buildIndexConfig with datetime and timestamp_field" {
+    const allocator = std.testing.allocator;
+
+    const schema = IndexSchema{
+        .field_mappings = &.{
+            .{ .name = "ts", .type = "datetime", .fast = true, .input_formats = &.{"unix_timestamp"}, .output_format = "unix_timestamp_nanos", .fast_precision = "milliseconds" },
+            .{ .name = "body", .type = "text" },
+        },
+        .tag_fields = &.{},
+        .default_search_fields = &.{"body"},
+        .timestamp_field = "ts",
+    };
+
+    const json = try buildIndexConfig(allocator, "dt-index", schema, null);
+    defer allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+    const doc_mapping = root.get("doc_mapping").?.object;
+
+    // timestamp_field
+    try std.testing.expectEqualStrings("ts", doc_mapping.get("timestamp_field").?.string);
+
+    // datetime field properties
+    const fields = doc_mapping.get("field_mappings").?.array;
+    const ts_field = fields.items[0].object;
+    try std.testing.expectEqualStrings("datetime", ts_field.get("type").?.string);
+    try std.testing.expectEqualStrings("unix_timestamp_nanos", ts_field.get("output_format").?.string);
+    try std.testing.expectEqualStrings("milliseconds", ts_field.get("fast_precision").?.string);
+
+    const input_fmts = ts_field.get("input_formats").?.array;
+    try std.testing.expectEqual(1, input_fmts.items.len);
+    try std.testing.expectEqualStrings("unix_timestamp", input_fmts.items[0].string);
 }
 
 test "buildIndexConfig with retention" {

@@ -4,7 +4,7 @@ import { AlertCircle, Map } from "lucide-react";
 import { searchTraces } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { TimeHistogram } from "@/components/time-histogram";
-import { serializeTimeParam } from "@/lib/time";
+import { serializeTimeParam, nanosToRfc3339 } from "@/lib/time";
 import {
   type SpanDocument,
   type TraceSummary,
@@ -108,10 +108,11 @@ export function TracesView() {
   const loadMore = useCallback(async () => {
     if (spans.length === 0) return;
     const lastTs = spans[spans.length - 1].span_start_timestamp_nanos;
+    const lastTsRfc = nanosToRfc3339(lastTs);
     const base = getBaseQuery();
     const cursorQuery = base === "*"
-      ? `span_start_timestamp_nanos:<${lastTs}`
-      : `${base} AND span_start_timestamp_nanos:<${lastTs}`;
+      ? `span_start_timestamp_nanos:<${lastTsRfc}`
+      : `${base} AND span_start_timestamp_nanos:<${lastTsRfc}`;
 
     setLoadingMore(true);
     try {

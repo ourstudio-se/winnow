@@ -6,6 +6,7 @@ pub const schema = index_schema.IndexSchema{
     .field_mappings = &field_mappings,
     .tag_fields = &.{"service_name"},
     .default_search_fields = &.{ "service_name", "span_name", "event_names" },
+    .timestamp_field = "span_start_timestamp_nanos",
 };
 
 pub const field_mappings = [_]index_schema.FieldMapping{
@@ -17,8 +18,8 @@ pub const field_mappings = [_]index_schema.FieldMapping{
     .{ .name = "resource_dropped_attributes_count", .type = "u64", .indexed = false },
     .{ .name = "span_name", .type = "text", .tokenizer = "default", .fast = false },
     .{ .name = "span_kind", .type = "u64", .fast = true },
-    .{ .name = "span_start_timestamp_nanos", .type = "u64", .fast = true },
-    .{ .name = "span_end_timestamp_nanos", .type = "u64", .fast = false },
+    .{ .name = "span_start_timestamp_nanos", .type = "datetime", .fast = true, .input_formats = &.{"unix_timestamp"}, .output_format = "unix_timestamp_nanos", .fast_precision = "milliseconds" },
+    .{ .name = "span_end_timestamp_nanos", .type = "datetime", .fast = false, .input_formats = &.{"unix_timestamp"}, .output_format = "unix_timestamp_nanos" },
     .{ .name = "span_duration_millis", .type = "u64", .fast = true },
     .{ .name = "span_attributes", .type = "json", .tokenizer = "raw", .fast = true },
     .{ .name = "span_dropped_attributes_count", .type = "u64", .indexed = false },

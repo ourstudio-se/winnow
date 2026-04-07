@@ -88,19 +88,22 @@ export function computeTimeRange(sel: TimeSelection): { startMs: number; endMs: 
   return { startMs: endMs - sel.seconds * 1000, endMs };
 }
 
+/** Convert a nanosecond timestamp (number) to an RFC3339 string for Quickwit datetime queries. */
+export function nanosToRfc3339(nanos: number): string {
+  return new Date(nanos / 1_000_000).toISOString();
+}
+
 /** Build a Tantivy range clause for the given time selection and timestamp field. */
 export function buildTimeRangeClause(
   sel: TimeSelection,
   field = "span_start_timestamp_nanos",
 ): string {
   if (sel.type === "relative") {
-    const nowNanos = BigInt(Date.now()) * 1_000_000n;
-    const startNanos = nowNanos - BigInt(sel.seconds) * 1_000_000_000n;
-    return `${field}:[${startNanos} TO ${nowNanos}]`;
+    const nowMs = Date.now();
+    const startMs = nowMs - sel.seconds * 1000;
+    return `${field}:[${new Date(startMs).toISOString()} TO ${new Date(nowMs).toISOString()}]`;
   }
-  const fromNanos = BigInt(sel.from.getTime()) * 1_000_000n;
-  const toNanos = BigInt(sel.to.getTime()) * 1_000_000n;
-  return `${field}:[${fromNanos} TO ${toNanos}]`;
+  return `${field}:[${sel.from.toISOString()} TO ${sel.to.toISOString()}]`;
 }
 
 /** "Nice" bucket intervals in milliseconds, from 1 second to 1 week. */

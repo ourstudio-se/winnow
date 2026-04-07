@@ -109,7 +109,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] **Sortable log columns** — clickable column headers with sort indicators (▲/▼); cycles desc → asc → reset; backend sort via Quickwit `sort_by`; cursor pagination for default timestamp sort, `start_offset` for custom sorts; sort preference persisted in localStorage
 - [x] **Raw query mode** — toggle on FilterBar switches between chip-based filters and a freeform Tantivy query input; URL-driven via `q` param (presence = raw mode); Ctrl+Enter or Run button submits; raw query wrapped in parens to preserve AND-join with time range; cross-view links (Logs→Traces, Traces→Service Map) carry `q` param
 - [x] **Raw query autocomplete** — token-at-cursor parsing suggests field names (from discovered fields) and values (via terms agg, cached per field); keyboard nav (Arrow/Tab/Enter/Escape); absolute-positioned dropdown; value insertion with quoting; `tantivy-tokens.ts` pure parsing module + `RawQueryInput` component
-- [x] **Time histogram** — Kibana-style bar chart between FilterBar and data table in logs + traces views; uses Quickwit `histogram` agg on u64 nanosecond timestamp fields; auto-sized "nice" intervals (1s–1d); plain SVG bars with drag-to-select that zooms the time range; tooltip on hover; shared `time.ts` module extracted from FilterBar; FilterBar syncs external URL `time` param changes; second-precision absolute time serialization
+- [x] **Time histogram** — Kibana-style bar chart between FilterBar and data table in logs + traces views; uses Quickwit `histogram` agg on datetime timestamp fields (millisecond intervals); auto-sized "nice" intervals (1s–1d); plain SVG bars with drag-to-select that zooms the time range; tooltip on hover; shared `time.ts` module extracted from FilterBar; FilterBar syncs external URL `time` param changes; second-precision absolute time serialization
 - [x] **Collapsible sidebar + column controls popover** — log column selector moved from sidebar to a Popover in FilterBar's trailing slot; `SidebarPanelContext` removed; sidebar collapses to 48px icon-only with localStorage persistence; collapsed nav items show tooltips on hover
 - [ ] Verify: can see service map with real edges, click through to traces and logs
 
@@ -207,6 +207,19 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Fix isImplicit: based on `realServiceNames` (from sampled spans), not `svcTotals` (SERVER/CONSUMER only) — client-only services like frontends no longer misclassified as implicit
 - [ ] Verify: service map shows dashed animated edges for messaging, solid for sync
 - [ ] Verify: implicit nodes (postgres, redis, kafka/orders) render with dashed borders
+
+## Fix: Datetime Timestamp Fields + Retention Support
+
+- [x] Change timestamp fields from `u64` to `datetime` in index schemas (`otel_index.zig`, `otel_logs_index.zig`)
+- [x] Add `input_formats`, `output_format`, `fast_precision` support to `FieldMapping` in `index_schema.zig`
+- [x] Add `timestamp_field` to `IndexSchema` and emit it in `buildIndexConfig`
+- [x] Update frontend queries: `buildTimeRangeClause` uses RFC3339 (Quickwit datetime range query requirement)
+- [x] Update frontend pagination: cursor queries use RFC3339 timestamps (`traces.tsx`, `logs.tsx`)
+- [x] Update time histogram: millisecond intervals for datetime fields (no longer nanosecond)
+- [x] Backend tests pass, frontend TypeScript check passes
+- [ ] Verify: delete existing indexes and restart — new indexes created with `datetime` type and `timestamp_field`
+- [ ] Verify: retention policies work (Quickwit no longer errors about missing timestamp field)
+- [ ] Verify: time range filtering, pagination, and histogram all work end-to-end
 
 ## Dev Tooling
 

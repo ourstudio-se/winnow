@@ -6,11 +6,12 @@ pub const schema = index_schema.IndexSchema{
     .field_mappings = &field_mappings,
     .tag_fields = &.{"service_name"},
     .default_search_fields = &.{"body"},
+    .timestamp_field = "timestamp_nanos",
 };
 
 pub const field_mappings = [_]index_schema.FieldMapping{
-    .{ .name = "timestamp_nanos", .type = "u64", .fast = true },
-    .{ .name = "observed_timestamp_nanos", .type = "u64" },
+    .{ .name = "timestamp_nanos", .type = "datetime", .fast = true, .input_formats = &.{"unix_timestamp"}, .output_format = "unix_timestamp_nanos", .fast_precision = "milliseconds" },
+    .{ .name = "observed_timestamp_nanos", .type = "datetime", .input_formats = &.{"unix_timestamp"}, .output_format = "unix_timestamp_nanos" },
     .{ .name = "service_name", .type = "text", .tokenizer = "raw", .fast = true },
     .{ .name = "severity_text", .type = "text", .tokenizer = "raw", .fast = true },
     .{ .name = "severity_number", .type = "u64", .fast = true },

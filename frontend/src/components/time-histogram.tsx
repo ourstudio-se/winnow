@@ -8,7 +8,7 @@ import {
 } from "@/lib/time";
 
 interface Bucket {
-  key: number; // nanosecond timestamp
+  key: number; // millisecond timestamp
   doc_count: number;
 }
 
@@ -150,7 +150,6 @@ export function TimeHistogram({
     if (windowMs <= 0) return;
 
     const interval = pickInterval(windowMs);
-    const intervalNs = interval * 1_000_000;
 
     setIntervalMs(interval);
     setLoading(true);
@@ -164,7 +163,7 @@ export function TimeHistogram({
         histogram: {
           histogram: {
             field: timestampField,
-            interval: intervalNs,
+            interval: interval,
           },
         },
       },
@@ -195,11 +194,8 @@ export function TimeHistogram({
   }
 
   // Filter buckets to the visible window
-  const startNs = timeRange.startMs * 1_000_000;
-  const endNs = timeRange.endMs * 1_000_000;
-  const intervalNs = intervalMs * 1_000_000;
   const visibleBuckets = buckets.filter(
-    (b) => b.key + intervalNs > startNs && b.key < endNs,
+    (b) => b.key + intervalMs > timeRange.startMs && b.key < timeRange.endMs,
   );
 
   const maxCount = Math.max(1, ...visibleBuckets.map((b) => b.doc_count));
@@ -207,10 +203,6 @@ export function TimeHistogram({
 
   function xFromMs(ms: number): number {
     return ((ms - timeRange.startMs) / windowMs) * containerWidth;
-  }
-
-  function xFromNs(ns: number): number {
-    return xFromMs(ns / 1_000_000);
   }
 
   function msFromX(x: number): number {
@@ -239,12 +231,11 @@ export function TimeHistogram({
     } else {
       // Find hovered bucket
       const mouseMs = msFromX(x);
-      const mouseNs = mouseMs * 1_000_000;
       const hovered = visibleBuckets.find(
-        (b) => mouseNs >= b.key && mouseNs < b.key + intervalNs,
+        (b) => mouseMs >= b.key && mouseMs < b.key + intervalMs,
       );
       if (hovered && (e.clientY - rect.top) <= BAR_HEIGHT) {
-        const bucketStartMs = hovered.key / 1_000_000;
+        const bucketStartMs = hovered.key;
         const bucketEndMs = bucketStartMs + intervalMs;
         setTooltip({
           x: e.clientX - rect.left,
@@ -309,7 +300,7 @@ export function TimeHistogram({
         >
           {/* Bars */}
           {visibleBuckets.map((b) => {
-            const x = xFromNs(b.key);
+            const x = xFromMs(b.key);
             const h = (b.doc_count / maxCount) * BAR_HEIGHT;
             return (
               <rect
