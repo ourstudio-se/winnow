@@ -1,3 +1,4 @@
+const Quickwit = @import("../quickwit.zig").Quickwit;
 const Server = @import("server.zig");
 const api = @import("../api.zig");
 const ingest = @import("../ingest.zig");
@@ -27,15 +28,21 @@ pub fn run(worker: *Worker) void {
     var arena = std.heap.ArenaAllocator.init(worker.server.allocator);
     defer arena.deinit();
 
+    // Each worker thread gets its own HTTP client — std.http.Client is not
+    // thread-safe and must not be shared across threads.
+    var http_client: std.http.Client = .{ .allocator = worker.server.allocator };
+    defer http_client.deinit();
+    const qw = Quickwit.init(&http_client, worker.server.opts.qw.base_url);
+
     while (worker.server.queue.pop()) |conn| {
         defer _ = arena.reset(.{ .retain_with_limit = arena_retain_size });
-        worker.handleConnection(arena.allocator(), conn);
+        worker.handleConnection(arena.allocator(), conn, qw);
     }
 
     std.log.debug("[THREAD {d}] Worker finished", .{std.Thread.getCurrentId()});
 }
 
-fn handleConnection(worker: *Worker, arena: std.mem.Allocator, conn: std.net.Server.Connection) void {
+fn handleConnection(worker: *Worker, arena: std.mem.Allocator, conn: std.net.Server.Connection, qw: Quickwit) void {
     defer conn.stream.close();
 
     var read_buf: [read_io_buf_size]u8 = undefined;
@@ -66,7 +73,7 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, conn: std.net.Ser
         .@"/v1/traces" => {
             if (!role.collector) return http_errors.sendNotFound(&request);
             if (request.head.method == .POST) {
-                ingest.handleTraces(&request, arena, worker.server.opts.qw, worker.server.opts.indices.traces) catch |err| {
+                ingest.handleTraces(&request, arena, qw, worker.server.opts.indices.traces) catch |err| {
                     std.log.err("ingest error: {}", .{err});
                 };
             } else {
@@ -81,7 +88,7 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, conn: std.net.Ser
         .@"/v1/logs" => {
             if (!role.collector) return http_errors.sendNotFound(&request);
             if (request.head.method == .POST) {
-                ingest.handleLogs(&request, arena, worker.server.opts.qw, worker.server.opts.indices.logs) catch |err| {
+                ingest.handleLogs(&request, arena, qw, worker.server.opts.indices.logs) catch |err| {
                     std.log.err("log ingest error: {}", .{err});
                 };
             } else {
@@ -99,7 +106,7 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, conn: std.net.Ser
 
             if (!role.api) return http_errors.sendNotFound(&request);
             if (std.mem.startsWith(u8, request.head.target, "/api/")) {
-                api.handleApi(&request, arena, worker.server.opts.qw, &worker.server.opts.indices) catch |err| {
+                api.handleApi(&request, arena, qw, &worker.server.opts.indices) catch |err| {
                     std.log.err("api error: {}", .{err});
                 };
             } else {
