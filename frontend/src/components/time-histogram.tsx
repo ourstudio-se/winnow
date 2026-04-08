@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { searchTraces, searchLogs } from "@/lib/api";
 import {
@@ -138,9 +138,13 @@ export function TimeHistogram({
     }
   };
 
-  // Parse time range from URL
-  const timeSel = parseTimeParam(searchParams.get("time"));
-  const timeRange = computeTimeRange(timeSel);
+  // Parse time range from URL — memoize so relative time (Date.now()) is
+  // snapshotted once per URL change, not recomputed on every render.
+  const timeParam = searchParams.get("time");
+  const timeRange = useMemo(
+    () => computeTimeRange(parseTimeParam(timeParam)),
+    [timeParam],
+  );
 
   // Fetch histogram data
   useEffect(() => {

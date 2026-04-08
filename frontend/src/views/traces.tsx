@@ -75,6 +75,11 @@ export function TracesView() {
     [],
   );
 
+  // Ref for searchParams so fetchData doesn't depend on it (avoids cascading
+  // identity changes: searchParams → fetchData → handleFilterChange → FilterBar effect).
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
+
   const fetchData = useCallback(
     async (filters?: FilterState) => {
       setLoading(true);
@@ -90,7 +95,7 @@ export function TracesView() {
         setSpans(res.hits);
         setTraces(groupSpansByTrace(res.hits));
         // Resolve fingerprint → human-readable span name from first matching hit
-        const fpFilter = searchParams.getAll("f").find(f => f.startsWith("span_fingerprint:"));
+        const fpFilter = searchParamsRef.current.getAll("f").find(f => f.startsWith("span_fingerprint:"));
         if (fpFilter && res.hits.length > 0) {
           const fpValue = fpFilter.slice("span_fingerprint:".length);
           const match = res.hits.find((h) => h.span_fingerprint === fpValue);
@@ -102,7 +107,7 @@ export function TracesView() {
         setLoading(false);
       }
     },
-    [searchParams, getBaseQuery],
+    [getBaseQuery],
   );
 
   const loadMore = useCallback(async () => {
