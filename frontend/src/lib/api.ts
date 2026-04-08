@@ -84,3 +84,23 @@ export async function getTracesMetadata(): Promise<IndexMetadataResponse> {
 export async function getLogsMetadata(): Promise<IndexMetadataResponse> {
   return getMetadata("logs");
 }
+
+export interface ServiceGraphResponse {
+  svc: SearchResponse<never>;
+  edges: SearchResponse<never>;
+  spans: SearchResponse<Record<string, unknown>>;
+}
+
+export async function fetchServiceGraph(
+  query: string,
+): Promise<ServiceGraphResponse> {
+  const res = await fetch("/api/v1/service-graph", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, await res.text());
+  }
+  return res.json();
+}

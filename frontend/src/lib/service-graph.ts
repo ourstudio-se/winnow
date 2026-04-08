@@ -11,10 +11,16 @@ export interface AggregatedEdge {
   edgeType: EdgeType;
 }
 
+export interface StatusBucket {
+  key: string;
+  doc_count: number;
+}
+
 export interface InnerTermsBucket {
   key: string;
   doc_count: number;
   avg_duration?: { value: number };
+  by_status?: { buckets: StatusBucket[] };
 }
 export interface OuterTermsBucket {
   key: string;
@@ -29,6 +35,7 @@ export interface ServiceTermsBucket {
   key: string;
   doc_count: number;
   avg_duration?: { value: number };
+  by_status?: { buckets: StatusBucket[] };
 }
 export interface ServiceAggResponse {
   services: { buckets: ServiceTermsBucket[] };
@@ -138,27 +145,26 @@ function inferMessagingSystem(attrs: Record<string, unknown> | null): string | n
   return null;
 }
 
+// --- Helpers for by_status sub-aggregation ---
+
+export function errorCountFromStatus(buckets: StatusBucket[] | undefined): number {
+  if (!buckets) return 0;
+  return buckets.find((b) => String(b.key) === "2")?.doc_count ?? 0;
+}
+
 // --- Aggregation (peer.service edges) ---
 
 export function parseEdgesFromAggs(
-  allAgg: EdgesAggResponse,
-  errorAgg: EdgesAggResponse,
+  agg: EdgesAggResponse,
 ): AggregatedEdge[] {
-  const errorLookup = new Map<string, number>();
-  for (const outer of errorAgg.edges.buckets) {
-    for (const inner of outer.dests.buckets) {
-      errorLookup.set(`${outer.key}\0${inner.key}`, inner.doc_count);
-    }
-  }
-
   const result: AggregatedEdge[] = [];
-  for (const outer of allAgg.edges.buckets) {
+  for (const outer of agg.edges.buckets) {
     for (const inner of outer.dests.buckets) {
       result.push({
         source: outer.key,
         dest: inner.key,
         callCount: inner.doc_count,
-        errorCount: errorLookup.get(`${outer.key}\0${inner.key}`) ?? 0,
+        errorCount: errorCountFromStatus(inner.by_status?.buckets),
         avgDurationMs: Math.round(inner.avg_duration?.value ?? 0),
         edgeType: "sync",
       });

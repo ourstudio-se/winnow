@@ -237,3 +237,16 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Verify: `nix build` produces 8.7MB statically-linked binary with embedded frontend
 - [x] Integrated frontend build in `build.zig` — auto-detects missing `static_assets.zig`, runs pnpm build + embed; `-Dforce-frontend` flag for explicit rebuild; `zig build check` (ZLS) never triggers frontend; nix `preBuild` still prepares assets so sandbox builds skip pnpm
 - [x] Removed inline `embed-frontend` script from `flake.nix` — uses `scripts/embed-frontend.sh` directly
+
+## Service Map Query Optimization
+
+- [x] Add `by_status` terms sub-aggregation to `InnerTermsBucket` and `ServiceTermsBucket` types
+- [x] Consolidate `parseEdgesFromAggs` from dual-response (all + error) to single response with inline error extraction via `by_status.buckets`
+- [x] Add `POST /api/v1/service-graph` backend endpoint — issues 3 sequential Quickwit queries (svc aggs, edge aggs, span fetch), returns combined JSON
+- [x] Add `fetchServiceGraph()` to frontend API client
+- [x] Replace 5+1 query pattern in `service-map.tsx` with single `fetchServiceGraph()` call
+- [x] Backend helper functions: `extractQueryField`, `extractTraceIds`, `buildTraceIdQuery` with unit tests
+- [x] Verify: `zig build test` passes
+- [x] Verify: `pnpm build` succeeds with no TS errors
+- [ ] Verify: service map loads with single `/api/v1/service-graph` request in Network tab
+- [ ] Verify: service map renders correctly — same nodes, edges, error rates, call counts

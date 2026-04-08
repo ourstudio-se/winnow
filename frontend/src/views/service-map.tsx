@@ -28,7 +28,7 @@ import {
   type Simulation,
 } from "d3-force";
 import { Server, Database, Globe, Zap, Inbox, AlertTriangle, GitBranch, Waypoints } from "lucide-react";
-import { searchTraces } from "@/lib/api";
+import { fetchServiceGraph } from "@/lib/api";
 import { FilterBar, type FilterState } from "@/components/filter-bar";
 import { ServiceContextMenu } from "@/components/service-context-menu";
 import { OperationsDrilldownPanel } from "@/components/operations-drilldown";
@@ -41,9 +41,8 @@ import {
   type ServiceEdgeData,
   type SampledSpan,
   type ForceNode,
-  TRACE_SAMPLE_SIZE,
-  MAX_SAMPLED_SPANS,
   formatDuration,
+  errorCountFromStatus,
   parseEdgesFromAggs,
   deriveEdgesFromTraces,
   mergeEdges,
@@ -561,125 +560,37 @@ export function ServiceMapView() {
       setLoading(true);
       setError(null);
       try {
-        const userQuery =
+        const query =
           effectiveFilters?.query && effectiveFilters.query !== "*"
             ? effectiveFilters.query
-            : "";
+            : "*";
 
-        // peer.service agg queries still use CLIENT/PRODUCER filter
-        const kindFilter = "(span_kind:3 OR span_kind:4)";
-        const baseQuery = userQuery ? `${kindFilter} AND ${userQuery}` : kindFilter;
+        // Single backend call handles all 3 Quickwit queries
+        const resp = await fetchServiceGraph(query);
 
-        // Trace ID sampling: terms agg naturally surfaces multi-service traces
-        // (they have more spans, so rank higher by doc_count)
-        const traceIdAggs = {
-          trace_ids: {
-            terms: { field: "trace_id", size: TRACE_SAMPLE_SIZE },
-          },
-        };
-
-        const nestedAggs = {
-          edges: {
-            terms: { field: "service_name", size: 200 },
-            aggs: {
-              dests: {
-                terms: { field: "span_attributes.peer.service", size: 200 },
-                aggs: {
-                  avg_duration: { avg: { field: "span_duration_millis" } },
-                },
-              },
-            },
-          },
-        };
-
-        const svcAggs = {
-          services: {
-            terms: { field: "service_name", size: 200 },
-            aggs: {
-              avg_duration: { avg: { field: "span_duration_millis" } },
-            },
-          },
-        };
-        // Node stats use only SERVER (kind=2) + CONSUMER (kind=5) — actual inbound calls
-        const svcKindFilter = "(span_kind:2 OR span_kind:5)";
-        const svcQuery = userQuery ? `${svcKindFilter} AND ${userQuery}` : svcKindFilter;
-        const svcErrorQuery = userQuery
-          ? `${svcKindFilter} AND span_status.code:2 AND ${userQuery}`
-          : `${svcKindFilter} AND span_status.code:2`;
-
-        // Wave 1: 5 parallel queries (trace ID sampling + 4 existing aggs)
-        const [traceIdRes, allRes, errorRes, svcAllRes, svcErrRes] = await Promise.all([
-          searchTraces<never>({
-            query: svcQuery,
-            max_hits: 0,
-            aggs: traceIdAggs,
-          }),
-          searchTraces<never>({
-            query: baseQuery,
-            max_hits: 0,
-            aggs: nestedAggs,
-          }),
-          searchTraces<never>({
-            query: `${baseQuery} AND span_status.code:2`,
-            max_hits: 0,
-            aggs: nestedAggs,
-          }),
-          searchTraces<never>({
-            query: svcQuery,
-            max_hits: 0,
-            aggs: svcAggs,
-          }),
-          searchTraces<never>({
-            query: svcErrorQuery,
-            max_hits: 0,
-            aggs: { services: { terms: { field: "service_name", size: 200 } } },
-          }),
-        ]);
-
-        // Wave 2: bulk fetch ALL spans for sampled traces (no user filter — the
-        // filter already scoped which traces we sampled; we need the full trace
-        // to build cross-service edges, not just the matching spans)
-        const traceIdBuckets = (traceIdRes.aggregations as { trace_ids: { buckets: { key: string }[] } }).trace_ids.buckets;
-        const traceIds = traceIdBuckets.map((b) => b.key);
-        let sampledSpans: SampledSpan[] = [];
-        if (traceIds.length > 0) {
-          try {
-            const traceQuery = traceIds.map((id) => `trace_id:${id}`).join(" OR ");
-            const spansRes = await searchTraces<SampledSpan>({
-              query: traceQuery,
-              max_hits: MAX_SAMPLED_SPANS,
-            });
-            sampledSpans = spansRes.hits;
-          } catch (e) {
-            console.warn("Failed to fetch sampled spans for parent-child edges, falling back to peer.service only:", e);
-          }
-        }
-
-        // Store sampled spans for edge operations drilldown
+        // Parse sampled spans from span fetch
+        const sampledSpans = (resp.spans.hits as unknown as SampledSpan[]) ?? [];
         sampledSpansRef.current = sampledSpans;
 
         // Derive edges from parent-child relationships
         const pcEdges = deriveEdgesFromTraces(sampledSpans);
         const realServiceNames = new Set(sampledSpans.map((s) => s.service_name));
 
-        // Parse peer.service edges from aggregations
-        const allAgg = allRes.aggregations as unknown as EdgesAggResponse;
-        const errorAgg = errorRes.aggregations as unknown as EdgesAggResponse;
-        const peerEdges = parseEdgesFromAggs(allAgg, errorAgg);
+        // Parse peer.service edges from edge aggregations (single response with by_status)
+        const edgeAgg = resp.edges.aggregations as unknown as EdgesAggResponse;
+        const peerEdges = parseEdgesFromAggs(edgeAgg);
 
         // Merge: parent-child takes priority, peer.service only for implicit leaves
         const aggregated = mergeEdges(pcEdges, peerEdges, realServiceNames);
 
-        // Per-service stats (all span kinds) for node health
-        const svcAllAgg = svcAllRes.aggregations as unknown as ServiceAggResponse;
-        const svcErrAgg = svcErrRes.aggregations as unknown as ServiceAggResponse;
+        // Per-service stats from svc aggregations (single response with by_status)
+        const svcAgg = resp.svc.aggregations as unknown as ServiceAggResponse;
         const svcTotals = new Map<string, { count: number; avgDurationMs: number }>();
-        for (const b of svcAllAgg.services.buckets) {
-          svcTotals.set(b.key, { count: b.doc_count, avgDurationMs: b.avg_duration?.value ?? 0 });
-        }
         const svcErrors = new Map<string, number>();
-        for (const b of svcErrAgg.services.buckets) {
-          svcErrors.set(b.key, b.doc_count);
+        for (const b of svcAgg.services.buckets) {
+          svcTotals.set(b.key, { count: b.doc_count, avgDurationMs: b.avg_duration?.value ?? 0 });
+          const errCount = errorCountFromStatus(b.by_status?.buckets);
+          if (errCount > 0) svcErrors.set(b.key, errCount);
         }
 
         // Store raw data for re-layout on mode toggle
