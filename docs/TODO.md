@@ -235,3 +235,5 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] `packages.frontend` nix derivation builds React app via pnpm
 - [x] `packages.default` nix derivation embeds frontend + builds single static binary
 - [x] Verify: `nix build` produces 8.7MB statically-linked binary with embedded frontend
+- [x] Integrated frontend build in `build.zig` — auto-detects missing `static_assets.zig`, runs pnpm build + embed; `-Dforce-frontend` flag for explicit rebuild; `zig build check` (ZLS) never triggers frontend; nix `preBuild` still prepares assets so sandbox builds skip pnpm
+- [x] Removed inline `embed-frontend` script from `flake.nix` — uses `scripts/embed-frontend.sh` directly

@@ -58,6 +58,42 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // --- Frontend build ---
+    const force_frontend = b.option(bool, "force-frontend", "Force rebuild of frontend assets") orelse false;
+
+    const need_frontend = force_frontend or blk: {
+        b.build_root.handle.access("src/server/static_assets.zig", .{}) catch break :blk true;
+        break :blk false;
+    };
+
+    const frontend_step: ?*std.Build.Step = if (need_frontend) step: {
+        // Only run pnpm install if node_modules doesn't exist yet (skip in nix sandbox
+        // where the frontend derivation already provides a complete dist/).
+        const has_node_modules = blk: {
+            b.build_root.handle.access("../frontend/node_modules", .{}) catch break :blk false;
+            break :blk true;
+        };
+
+        const pnpm_build = b.addSystemCommand(&.{ "pnpm", "--dir", "../frontend", "build" });
+        pnpm_build.setCwd(b.path("."));
+
+        if (!has_node_modules) {
+            const pnpm_install = b.addSystemCommand(&.{ "pnpm", "--dir", "../frontend", "install", "--frozen-lockfile" });
+            pnpm_install.setCwd(b.path("."));
+            pnpm_build.step.dependOn(&pnpm_install.step);
+        }
+
+        const symlink = b.addSystemCommand(&.{ "ln", "-sfn", "../../../frontend/dist", "src/server/frontend-dist" });
+        symlink.setCwd(b.path("."));
+        symlink.step.dependOn(&pnpm_build.step);
+
+        const embed = b.addSystemCommand(&.{ "bash", "../scripts/embed-frontend.sh", "src/server/frontend-dist", "src/server/static_assets.zig" });
+        embed.setCwd(b.path("."));
+        embed.step.dependOn(&symlink.step);
+
+        break :step &embed.step;
+    } else null;
+
     // --- Main executable ---
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -68,6 +104,10 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("kdl", kdl_dep.module("kdl"));
 
     const exe = b.addExecutable(.{ .name = "winnow", .root_module = exe_mod });
+
+    if (frontend_step) |step| {
+        exe.step.dependOn(step);
+    }
 
     b.installArtifact(exe);
 
@@ -98,6 +138,10 @@ pub fn build(b: *std.Build) void {
     test_mod.addImport("kdl", kdl_dep.module("kdl"));
 
     const unit_tests = b.addTest(.{ .root_module = test_mod });
+
+    if (frontend_step) |step| {
+        unit_tests.step.dependOn(step);
+    }
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
