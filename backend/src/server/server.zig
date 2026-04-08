@@ -1,7 +1,6 @@
 const std = @import("std");
 const api = @import("../api.zig");
 const ingest = @import("../ingest.zig");
-const Quickwit = @import("../quickwit.zig").Quickwit;
 const static_assets = @import("static_assets.zig");
 const tsq = @import("../thread_safe_queue.zig");
 const Worker = @import("worker.zig");
@@ -17,7 +16,7 @@ const ServerOpts = struct {
     indices: api.IndexConfig,
     number_of_workers: usize,
     port: u16,
-    qw: Quickwit,
+    quickwit_url: []const u8,
     roles: ServerRoles,
 };
 

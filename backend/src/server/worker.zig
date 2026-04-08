@@ -1,4 +1,6 @@
-const Quickwit = @import("../quickwit.zig").Quickwit;
+const quickwit_mod = @import("../quickwit.zig");
+const HttpClient = quickwit_mod.HttpClient;
+const Quickwit = quickwit_mod.Quickwit;
 const Server = @import("server.zig");
 const api = @import("../api.zig");
 const ingest = @import("../ingest.zig");
@@ -32,7 +34,8 @@ pub fn run(worker: *Worker) void {
     // thread-safe and must not be shared across threads.
     var http_client: std.http.Client = .{ .allocator = worker.server.allocator };
     defer http_client.deinit();
-    const qw = Quickwit.init(&http_client, worker.server.opts.qw.base_url);
+    const client = HttpClient.init(&http_client);
+    const qw = Quickwit.init(client, worker.server.opts.quickwit_url);
 
     while (worker.server.queue.pop()) |conn| {
         defer _ = arena.reset(.{ .retain_with_limit = arena_retain_size });

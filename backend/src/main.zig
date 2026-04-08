@@ -1,6 +1,8 @@
 const Allocator = std.mem.Allocator;
 const IndexConfig = api.IndexConfig;
-const Quickwit = @import("quickwit.zig").Quickwit;
+const quickwit_mod = @import("quickwit.zig");
+const HttpClient = quickwit_mod.HttpClient;
+const Quickwit = quickwit_mod.Quickwit;
 const Server = @import("server/server.zig");
 const api = @import("api.zig");
 const config_mod = @import("config.zig");
@@ -120,7 +122,8 @@ pub fn main() !void {
     }
 
     std.log.info("connecting to Quickwit at {s}", .{cfg.quickwit_url});
-    const qw = Quickwit.init(&http_client, cfg.quickwit_url);
+    const client = HttpClient.init(&http_client);
+    const qw = Quickwit.init(client, cfg.quickwit_url);
 
     // Only validate indices when non-static services are served
     if (serve.collector != null or serve.api != null) {
@@ -165,7 +168,7 @@ pub fn main() !void {
             .indices = indices,
             .number_of_workers = serve_api_cfg.number_of_workers,
             .port = serve_api_cfg.http_port,
-            .qw = qw,
+            .quickwit_url = cfg.quickwit_url,
             .roles = .{ .api = true },
         });
         try servers_by_port.put(serve_api_cfg.http_port, server);
@@ -185,7 +188,7 @@ pub fn main() !void {
             .indices = indices,
             .number_of_workers = serve_collector_cfg.number_of_workers,
             .port = serve_collector_cfg.http_port,
-            .qw = qw,
+            .quickwit_url = cfg.quickwit_url,
             .roles = .{ .collector = true },
         });
         try servers_by_port.put(serve_collector_cfg.http_port, server);
@@ -229,6 +232,7 @@ test "otlp log proto types are importable" {
 }
 
 test {
+    _ = HttpClient;
     _ = Quickwit;
     _ = Server;
     _ = otel_index;
