@@ -168,7 +168,7 @@ fn handleServiceGraph(
     // Query E: Connector edges from service-edges index
     const edges_index_query = buildEdgesIndexQuery(arena, user_query) catch "*";
     const connector_query_json = try std.fmt.allocPrint(arena,
-        \\{{"query":"{s}","max_hits":0,"aggs":{{"by_client":{{"terms":{{"field":"client","size":200}},"aggs":{{"by_server":{{"terms":{{"field":"server","size":200}},"aggs":{{"total_calls":{{"sum":{{"field":"calls"}}}},"total_errors":{{"sum":{{"field":"errors"}}}}}}}}}}}}}}}}
+        \\{{"query":"{s}","max_hits":0,"aggs":{{"by_client":{{"terms":{{"field":"client","size":200}},"aggs":{{"by_server":{{"terms":{{"field":"server","size":200}},"aggs":{{"total_calls":{{"sum":{{"field":"calls"}}}},"total_errors":{{"sum":{{"field":"errors"}}}},"conn_type":{{"terms":{{"field":"connection_type","size":5}}}}}}}}}}}}}}}}
     , .{edges_index_query});
 
     // Graceful fallback: if edges index query fails, return empty connector agg

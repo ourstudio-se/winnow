@@ -9,6 +9,7 @@ export interface AggregatedEdge {
   errorCount: number;
   avgDurationMs: number;
   edgeType: EdgeType;
+  connectionType?: string;
 }
 
 export interface StatusBucket {
@@ -70,6 +71,7 @@ interface ConnectorServerBucket {
   doc_count: number;
   total_calls: { value: number };
   total_errors: { value: number };
+  conn_type?: { buckets: { key: string; doc_count: number }[] };
 }
 
 interface ConnectorClientBucket {
@@ -101,6 +103,13 @@ export function inferServiceKind(name: string): ServiceKind {
   if (/gateway|proxy|nginx|envoy|haproxy|ingress|lb|load.?balancer/.test(lower))
     return "gateway";
   return "service";
+}
+
+function connectionTypeToKind(connType: string | undefined): ServiceKind | null {
+  if (!connType) return null;
+  if (connType === "database") return "database";
+  if (connType === "messaging_system") return "messaging";
+  return null;
 }
 
 // --- Helpers for by_status sub-aggregation ---
@@ -138,7 +147,13 @@ export function parseConnectorEdges(
 ): AggregatedEdge[] {
   const result: AggregatedEdge[] = [];
   for (const clientBucket of agg.by_client.buckets) {
+    if (clientBucket.key === "unknown") continue;
     for (const serverBucket of clientBucket.by_server.buckets) {
+      if (serverBucket.key === "unknown") continue;
+      // Pick the most common non-empty connection_type
+      const connType = serverBucket.conn_type?.buckets
+        ?.filter((b) => b.key !== "" && b.key !== "virtual_node")
+        ?.sort((a, b) => b.doc_count - a.doc_count)[0]?.key;
       result.push({
         source: clientBucket.key,
         dest: serverBucket.key,
@@ -146,6 +161,7 @@ export function parseConnectorEdges(
         errorCount: Math.round(serverBucket.total_errors?.value ?? 0),
         avgDurationMs: 0, // Connector doesn't provide duration
         edgeType: "sync",
+        connectionType: connType,
       });
     }
   }
@@ -196,6 +212,14 @@ export function computeServiceStats(
   // like a frontend would be missing from svcTotals but IS a real service.
   const implicitLeaves = new Set(serviceNames.filter((n) => !realServiceNames.has(n)));
 
+  // Build connection type overrides from connector edges
+  const connTypeMap = new Map<string, string>();
+  for (const edge of aggregated) {
+    if (edge.connectionType && !connTypeMap.has(edge.dest)) {
+      connTypeMap.set(edge.dest, edge.connectionType);
+    }
+  }
+
   const stats = new Map<string, ServiceStats>();
   for (const name of serviceNames) {
     if (implicitLeaves.has(name)) {
@@ -207,9 +231,10 @@ export function computeServiceStats(
           weightedDuration += edge.avgDurationMs * edge.callCount;
         }
       }
+      const connType = connTypeMap.get(name);
       stats.set(name, {
         label: name,
-        serviceKind: inferServiceKind(name),
+        serviceKind: connectionTypeToKind(connType) ?? inferServiceKind(name),
         totalCalls,
         totalErrors,
         avgDurationMs: totalCalls > 0 ? Math.round(weightedDuration / totalCalls) : 0,
