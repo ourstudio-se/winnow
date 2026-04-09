@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { useNavigate } from "react-router";
 import { X, AlertTriangle, CircleCheck, Loader2 } from "lucide-react";
 import { searchTraces } from "@/lib/api";
 import { SPAN_KIND_SHORT, formatDuration } from "@/lib/traces";
-import { parseTimeParam, buildTimeRangeClause } from "@/lib/time";
 
 interface OperationsDrilldownProps {
   serviceName: string;
+  activeQuery: string;
   errorsOnly: boolean;
   isImplicit: boolean;
   sourceService?: string;
+  serverFingerprints?: string[];
   onClose: () => void;
   onToggleErrorsOnly: (errorsOnly: boolean) => void;
 }
@@ -73,14 +74,15 @@ function bucketsToRows(
 
 export function OperationsDrilldownPanel({
   serviceName,
+  activeQuery,
   errorsOnly,
   isImplicit,
   sourceService,
+  serverFingerprints,
   onClose,
   onToggleErrorsOnly,
 }: OperationsDrilldownProps) {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const [operations, setOperations] = useState<OperationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -89,14 +91,19 @@ export function OperationsDrilldownPanel({
     setLoading(true);
     setError(null);
     try {
-      const timeSel = parseTimeParam(searchParams.get("time"));
-      const timeClause = buildTimeRangeClause(timeSel);
+      // Implicit targets (databases, caches): query CLIENT spans via peer.service/db.system
+      // Real services: query SERVER spans on the target
+      // When we have server fingerprints from the edge, use them to scope to only
+      // operations that flow through this specific edge (not all SERVER ops on target)
+      const hasFpFilter = !isImplicit && sourceService && serverFingerprints && serverFingerprints.length > 0;
       const serviceBase = isImplicit
         ? sourceService
           ? `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
           : `(span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
-        : `service_name:"${serviceName}" AND (span_kind:2 OR span_kind:5)`;
-      const base = `${timeClause} AND ${serviceBase}`;
+        : hasFpFilter
+          ? `service_name:"${serviceName}" AND (span_kind:2 OR span_kind:5) AND span_fingerprint:(${serverFingerprints.map((fp) => `"${fp}"`).join(" OR ")})`
+          : `service_name:"${serviceName}" AND (span_kind:2 OR span_kind:5)`;
+      const base = `(${activeQuery}) AND ${serviceBase}`;
       const errorQuery = `${base} AND span_status.code:2`;
       const okQuery = `${base} AND NOT span_status.code:2`;
 
@@ -187,7 +194,7 @@ export function OperationsDrilldownPanel({
     } finally {
       setLoading(false);
     }
-  }, [serviceName, errorsOnly, isImplicit, sourceService, searchParams]);
+  }, [serviceName, activeQuery, errorsOnly, isImplicit, sourceService, serverFingerprints]);
 
   useEffect(() => {
     fetchOperations();

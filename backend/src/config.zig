@@ -59,7 +59,7 @@ pub const defaults = Config{
     .quickwit_url = "http://localhost:7280",
     .traces = .{ .index_id = "winnow-traces-v0_1" },
     .logs = .{ .index_id = "winnow-logs-v0_1" },
-    .edges = .{ .index_id = "winnow-edges-v0_1" },
+    .edges = .{ .index_id = "winnow-edges-v0_2" },
 };
 
 pub const CliResult = struct {
@@ -341,7 +341,7 @@ test "parseKdl partial config uses defaults" {
     try std.testing.expectEqualStrings("http://localhost:7280", cfg.quickwit_url);
     try std.testing.expectEqualStrings("winnow-traces-v0_1", cfg.traces.index_id);
     try std.testing.expectEqualStrings("winnow-logs-v0_1", cfg.logs.index_id);
-    try std.testing.expectEqualStrings("winnow-edges-v0_1", cfg.edges.index_id);
+    try std.testing.expectEqualStrings("winnow-edges-v0_2", cfg.edges.index_id);
     // Retention should be set
     try std.testing.expectEqualStrings("60 days", cfg.traces.retention.?);
     try std.testing.expect(cfg.logs.retention == null);
@@ -366,7 +366,7 @@ test "defaults have expected values" {
     try std.testing.expectEqualStrings("http://localhost:7280", defaults.quickwit_url);
     try std.testing.expectEqualStrings("winnow-traces-v0_1", defaults.traces.index_id);
     try std.testing.expectEqualStrings("winnow-logs-v0_1", defaults.logs.index_id);
-    try std.testing.expectEqualStrings("winnow-edges-v0_1", defaults.edges.index_id);
+    try std.testing.expectEqualStrings("winnow-edges-v0_2", defaults.edges.index_id);
     try std.testing.expect(defaults.traces.retention == null);
     try std.testing.expect(defaults.logs.retention == null);
     try std.testing.expect(defaults.edges.retention == null);

@@ -45,7 +45,7 @@ nix build
 ./result/bin/winnow
 ```
 
-By default the server listens on port 8080 and expects Quickwit at `http://localhost:7280`. Configure via environment variables:
+By default the API listens on port 8080 and the collector on port 4318. Quickwit is expected at `http://localhost:7280`. Configure via environment variables:
 
 ```
 QUICKWIT_URL=http://quickwit.example.com:7280 ./result/bin/winnow
@@ -65,7 +65,7 @@ Point any OpenTelemetry SDK at the server's OTLP HTTP endpoint:
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8080
 ```
 
-The server accepts `POST /v1/traces` and `POST /v1/logs` in OTLP protobuf format.
+The server accepts `POST /v1/traces`, `POST /v1/logs`, and `POST /v1/metrics` in OTLP protobuf format. The metrics endpoint is used by the OTel Collector's servicegraph connector to feed pre-aggregated service edge data.
 
 ### Configuration
 
@@ -77,6 +77,7 @@ Configuration is resolved in order: defaults < KDL config file < environment var
 quickwit url="http://localhost:7280"
 traces index="winnow-traces-v0_1" retention="90 days"
 logs index="winnow-logs-v0_1" retention="30 days"
+edges index="winnow-edges-v0_2" retention="7 days"
 ```
 
 Pass with `--config`:
@@ -89,30 +90,32 @@ If no `--config` is given, the server looks for `./winnow.kdl` in the working di
 
 **Serve section** (optional):
 
-The `serve` block controls which components run and on which ports. By default (no `serve` block), both the collector and API run on port 8080.
+The `serve` block controls which components run and on which ports. By default (no `serve` block), both the collector (port 4318) and API (port 8080) are enabled.
 
 ```kdl
-// Split collector and API onto separate ports
+// Explicit ports (these are the defaults)
 serve {
-    collector port=4318
-    api port=8080
+    collector http_port=4318
+    api http_port=8080
 }
 ```
+
+Each component also accepts `number_of_workers` (default: 6) to control the number of HTTP worker threads.
 
 This is useful for production deployments where you want to scale the collector (high-throughput ingest) and API (user-facing queries) independently as separate processes.
 
 ```kdl
 // Collector-only instance
 serve {
-    collector port=4318
+    collector http_port=4318
 }
 
 // API-only instance
 serve {
-    api port=8080
+    api http_port=8080
 }
 
-// Both on same port (equivalent to the default)
+// Both on default ports
 serve {
     collector
     api
@@ -127,6 +130,7 @@ When a component is disabled, its routes return 404. A `serve` block with no chi
 QUICKWIT_URL            Quickwit base URL (default: http://localhost:7280)
 WINNOW_TRACES_INDEX     Quickwit index for traces (default: winnow-traces-v0_1)
 WINNOW_LOGS_INDEX       Quickwit index for logs (default: winnow-logs-v0_1)
+WINNOW_EDGES_INDEX      Quickwit index for service edges (default: winnow-edges-v0_2)
 ```
 
 **Startup behavior:**

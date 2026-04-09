@@ -10,6 +10,7 @@ export interface AggregatedEdge {
   avgDurationMs: number;
   edgeType: EdgeType;
   connectionType?: string;
+  serverFingerprints?: string[];
 }
 
 export interface StatusBucket {
@@ -62,6 +63,7 @@ export type ServiceEdgeData = {
   errorCount: number;
   avgDurationMs: number;
   edgeType: EdgeType;
+  serverFingerprints?: string[];
 };
 
 // --- Connector (servicegraph) types ---
@@ -72,6 +74,7 @@ interface ConnectorServerBucket {
   total_calls: { value: number };
   total_errors: { value: number };
   conn_type?: { buckets: { key: string; doc_count: number }[] };
+  by_server_fp?: { buckets: { key: string; doc_count: number }[] };
 }
 
 interface ConnectorClientBucket {
@@ -154,6 +157,10 @@ export function parseConnectorEdges(
       const connType = serverBucket.conn_type?.buckets
         ?.filter((b) => b.key !== "" && b.key !== "virtual_node")
         ?.sort((a, b) => b.doc_count - a.doc_count)[0]?.key;
+      // Extract server fingerprints, filtering out empty strings
+      const serverFingerprints = serverBucket.by_server_fp?.buckets
+        ?.map((b) => b.key)
+        .filter((k) => k !== "") ?? [];
       result.push({
         source: clientBucket.key,
         dest: serverBucket.key,
@@ -162,6 +169,7 @@ export function parseConnectorEdges(
         avgDurationMs: 0, // Connector doesn't provide duration
         edgeType: "sync",
         connectionType: connType,
+        ...(serverFingerprints.length > 0 ? { serverFingerprints } : {}),
       });
     }
   }

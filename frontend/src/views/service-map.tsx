@@ -119,6 +119,7 @@ function buildGraph(
       errorCount: e.errorCount,
       avgDurationMs: e.avgDurationMs,
       edgeType: e.edgeType,
+      serverFingerprints: e.serverFingerprints,
     },
   }));
 
@@ -335,6 +336,7 @@ export function ServiceMapView() {
     errorsOnly: boolean;
     isImplicit: boolean;
     sourceService?: string;
+    serverFingerprints?: string[];
   } | null>(null);
 
   const filterBarStateRef = useRef<FilterState | undefined>(undefined);
@@ -345,6 +347,7 @@ export function ServiceMapView() {
     svcTotals: Map<string, { count: number; avgDurationMs: number }>;
     svcErrors: Map<string, number>;
     realServiceNames: Set<string>;
+    activeQuery: string;
   } | null>(null);
 
   // Simulation refs
@@ -542,6 +545,7 @@ export function ServiceMapView() {
         errorsOnly: false,
         isImplicit,
         sourceService: edge.source,
+        serverFingerprints: edge.data?.serverFingerprints,
       });
     },
     [nodes],
@@ -577,8 +581,11 @@ export function ServiceMapView() {
         const svcAggForNames = resp.svc.aggregations as unknown as ServiceAggResponse;
         const realServiceNames = new Set(svcAggForNames.services.buckets.map((b) => b.key));
 
-        // Merge: connector edges take priority, peer.service fills implicit leaves
-        const aggregated = connectorEdges.length > 0
+        // Connector edges are pre-aggregated (no trace_id, service_name, etc.)
+        // so they're only meaningful when the query is purely time-based.
+        // With non-time filters, fall back to peer.service edges from the traces index.
+        const isTimeOnly = query === "*" || /^span_start_timestamp_nanos:\[[^\]]+\]$/.test(query.trim());
+        const aggregated = connectorEdges.length > 0 && isTimeOnly
           ? mergeEdgesV2(connectorEdges, peerEdges, realServiceNames)
           : peerEdges;
 
@@ -593,7 +600,7 @@ export function ServiceMapView() {
         }
 
         // Store raw data for re-layout on mode toggle
-        graphDataRef.current = { aggregated, svcTotals, svcErrors, realServiceNames };
+        graphDataRef.current = { aggregated, svcTotals, svcErrors, realServiceNames, activeQuery: query };
 
         const graph = buildGraph(aggregated, svcTotals, svcErrors, realServiceNames, layoutMode);
         setNodes(graph.nodes);
@@ -718,9 +725,11 @@ export function ServiceMapView() {
           {drilldown && (
             <OperationsDrilldownPanel
               serviceName={drilldown.serviceName}
+              activeQuery={graphDataRef.current?.activeQuery ?? "*"}
               errorsOnly={drilldown.errorsOnly}
               isImplicit={drilldown.isImplicit}
               sourceService={drilldown.sourceService}
+              serverFingerprints={drilldown.serverFingerprints}
               onClose={() => setDrilldown(null)}
               onToggleErrorsOnly={(errorsOnly) =>
                 setDrilldown((prev) => (prev ? { ...prev, errorsOnly } : null))
