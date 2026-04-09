@@ -41,6 +41,7 @@ pub fn build(b: *std.Build) void {
         "-Iproto",
         "proto/opentelemetry/proto/collector/trace/v1/trace_service.proto",
         "proto/opentelemetry/proto/collector/logs/v1/logs_service.proto",
+        "proto/opentelemetry/proto/collector/metrics/v1/metrics_service.proto",
     });
     run_protoc.addPrefixedFileArg("--plugin=protoc-gen-zig=", protoc_gen_zig.getEmittedBin());
     run_protoc.setCwd(b.path("."));

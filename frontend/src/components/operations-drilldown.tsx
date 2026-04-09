@@ -1,17 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { X, AlertTriangle, CircleCheck, Loader2 } from "lucide-react";
 import { searchTraces } from "@/lib/api";
 import { SPAN_KIND_SHORT, formatDuration } from "@/lib/traces";
 import { parseTimeParam, buildTimeRangeClause } from "@/lib/time";
-import { type SampledSpan, deriveEdgeOperations } from "@/lib/service-graph";
 
 interface OperationsDrilldownProps {
   serviceName: string;
   errorsOnly: boolean;
   isImplicit: boolean;
   sourceService?: string;
-  sampledSpans?: SampledSpan[];
   onClose: () => void;
   onToggleErrorsOnly: (errorsOnly: boolean) => void;
 }
@@ -78,7 +76,6 @@ export function OperationsDrilldownPanel({
   errorsOnly,
   isImplicit,
   sourceService,
-  sampledSpans,
   onClose,
   onToggleErrorsOnly,
 }: OperationsDrilldownProps) {
@@ -88,53 +85,7 @@ export function OperationsDrilldownPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Edge → real service: derive operations client-side from sampled spans
-  // (same parent-child join logic that produces the edge count labels)
-  const useClientSide = !!sourceService && !isImplicit && !!sampledSpans;
-
-  const clientSideOps = useMemo(() => {
-    if (!useClientSide) return null;
-    return deriveEdgeOperations(sampledSpans, sourceService!, serviceName);
-  }, [useClientSide, sampledSpans, sourceService, serviceName]);
-
-  // Client-side path: convert DerivedOperation[] → OperationRow[]
-  useEffect(() => {
-    if (!useClientSide || !clientSideOps) return;
-
-    const rows: OperationRow[] = [];
-    for (const op of clientSideOps) {
-      const fp = op.spanFingerprint ?? `${op.spanName}\0${op.spanKind}`;
-      if (op.errorCount > 0) {
-        rows.push({
-          fingerprint: fp,
-          spanName: op.spanName,
-          spanKind: op.spanKind,
-          count: op.errorCount,
-          avgDurationMs: op.avgDurationMs,
-          status: "error",
-        });
-      }
-      const okCount = op.count - op.errorCount;
-      if (okCount > 0 && !errorsOnly) {
-        rows.push({
-          fingerprint: fp,
-          spanName: op.spanName,
-          spanKind: op.spanKind,
-          count: okCount,
-          avgDurationMs: op.avgDurationMs,
-          status: "ok",
-        });
-      }
-    }
-    rows.sort((a, b) => b.count - a.count);
-    setOperations(rows);
-    setLoading(false);
-    setError(null);
-  }, [useClientSide, clientSideOps, errorsOnly]);
-
-  // Server-side path: Quickwit queries (node drilldowns + implicit targets)
   const fetchOperations = useCallback(async () => {
-    if (useClientSide) return;
     setLoading(true);
     setError(null);
     try {
@@ -236,11 +187,11 @@ export function OperationsDrilldownPanel({
     } finally {
       setLoading(false);
     }
-  }, [serviceName, errorsOnly, isImplicit, sourceService, searchParams, useClientSide]);
+  }, [serviceName, errorsOnly, isImplicit, sourceService, searchParams]);
 
   useEffect(() => {
-    if (!useClientSide) fetchOperations();
-  }, [fetchOperations, useClientSide]);
+    fetchOperations();
+  }, [fetchOperations]);
 
   return (
     <div className="flex w-96 shrink-0 flex-col overflow-hidden border-l border-border bg-card">

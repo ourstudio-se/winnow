@@ -63,23 +63,24 @@ export type ServiceEdgeData = {
   edgeType: EdgeType;
 };
 
-// --- Sampled span type for parent-child joining ---
+// --- Connector (servicegraph) types ---
 
-export interface SampledSpan {
-  trace_id: string;
-  span_id: string;
-  parent_span_id: string | null;
-  service_name: string;
-  span_name: string;
-  span_fingerprint: string | null;
-  span_kind: number;
-  span_status: { code?: number } | null;
-  span_duration_millis: number;
-  span_attributes: Record<string, unknown> | null;
+interface ConnectorServerBucket {
+  key: string;
+  doc_count: number;
+  total_calls: { value: number };
+  total_errors: { value: number };
 }
 
-export const TRACE_SAMPLE_SIZE = 200;
-export const MAX_SAMPLED_SPANS = 5000;
+interface ConnectorClientBucket {
+  key: string;
+  doc_count: number;
+  by_server: { buckets: ConnectorServerBucket[] };
+}
+
+export interface ConnectorAggResponse {
+  by_client: { buckets: ConnectorClientBucket[] };
+}
 
 // --- Helpers ---
 
@@ -100,49 +101,6 @@ export function inferServiceKind(name: string): ServiceKind {
   if (/gateway|proxy|nginx|envoy|haproxy|ingress|lb|load.?balancer/.test(lower))
     return "gateway";
   return "service";
-}
-
-function inferMessagingTopic(attrs: Record<string, unknown> | null): string | null {
-  if (!attrs) return null;
-  // Well-known keys in priority order (OTel semconv + system-specific + bare)
-  for (const key of [
-    "messaging.destination.name",
-    "messaging.destination",
-    "messaging.kafka.destination.topic",
-    "messaging.kafka.topic",
-    "messaging.rabbitmq.destination.routing_key",
-    "messaging.nats.subject",
-    "messaging.eventhubs.destination.name",
-    "messaging.servicebus.destination.name",
-    // Bare keys (non-standard but common in some instrumentation libraries)
-    "kafka.topic",
-    "rabbitmq.routing_key",
-    "nats.subject",
-  ]) {
-    if (typeof attrs[key] === "string") return attrs[key] as string;
-  }
-  // Fallback: scan for any messaging attribute that looks like a destination
-  for (const [key, val] of Object.entries(attrs)) {
-    if (typeof val !== "string") continue;
-    if (key.startsWith("messaging.") && /destination|topic|subject|queue|channel/.test(key)) {
-      return val;
-    }
-  }
-  return null;
-}
-
-function inferMessagingSystem(attrs: Record<string, unknown> | null): string | null {
-  if (!attrs) return null;
-  if (typeof attrs["messaging.system"] === "string") return attrs["messaging.system"] as string;
-  // Infer from attribute key prefixes (standard and bare)
-  for (const key of Object.keys(attrs)) {
-    if (key.startsWith("messaging.kafka.") || key.startsWith("kafka.")) return "kafka";
-    if (key.startsWith("messaging.rabbitmq.") || key.startsWith("rabbitmq.")) return "rabbitmq";
-    if (key.startsWith("messaging.nats.") || key.startsWith("nats.")) return "nats";
-    if (key.startsWith("messaging.eventhubs.")) return "eventhubs";
-    if (key.startsWith("messaging.servicebus.")) return "servicebus";
-  }
-  return null;
 }
 
 // --- Helpers for by_status sub-aggregation ---
@@ -173,266 +131,43 @@ export function parseEdgesFromAggs(
   return result;
 }
 
-// --- Parent-child edge derivation from sampled traces ---
+// --- Connector edge parsing ---
 
-/** Infer implicit peer name from span attributes (for CLIENT spans with no child in the trace). */
-function inferPeerName(attrs: Record<string, unknown> | null): string | null {
-  if (!attrs) return null;
-  if (typeof attrs["peer.service"] === "string") return attrs["peer.service"];
-  if (typeof attrs["db.system"] === "string") return attrs["db.system"];
-  return null;
-}
-
-interface EdgeStat {
-  count: number;
-  errors: number;
-  totalDuration: number;
-  edgeType: EdgeType;
-}
-
-function addEdgeStat(
-  edgeStats: Map<string, EdgeStat>,
-  source: string,
-  dest: string,
-  durationMs: number,
-  isError: boolean,
-  edgeType: EdgeType = "sync",
-) {
-  const key = `${source}\0${dest}`;
-  const existing = edgeStats.get(key);
-  if (existing) {
-    existing.count += 1;
-    existing.errors += isError ? 1 : 0;
-    existing.totalDuration += durationMs;
-    if (edgeType === "async") existing.edgeType = "async";
-  } else {
-    edgeStats.set(key, { count: 1, errors: isError ? 1 : 0, totalDuration: durationMs, edgeType });
-  }
-}
-
-/** Build an intermediary node name from messaging system and topic. */
-function messagingNodeName(system: string | null, topic: string | null): string | null {
-  if (system && topic) return `${system}/${topic}`;
-  if (system) return system;
-  if (topic) return topic;
-  return null;
-}
-
-export function deriveEdgesFromTraces(spans: SampledSpan[]): AggregatedEdge[] {
-  if (spans.length === 0) return [];
-
-  // Group spans by trace_id
-  const traceGroups = new Map<string, SampledSpan[]>();
-  for (const span of spans) {
-    let group = traceGroups.get(span.trace_id);
-    if (!group) {
-      group = [];
-      traceGroups.set(span.trace_id, group);
-    }
-    group.push(span);
-  }
-
-  // Accumulate edge stats: "source\0dest" → {count, errors, totalDuration, edgeType}
-  const edgeStats = new Map<string, EdgeStat>();
-
-  for (const [, traceSpans] of traceGroups) {
-    // Build span_id → span lookup for this trace
-    const spanById = new Map<string, SampledSpan>();
-    for (const span of traceSpans) {
-      spanById.set(span.span_id, span);
-    }
-
-    // Track which CLIENT/PRODUCER spans have a cross-service child
-    const hasExternalChild = new Set<string>();
-
-    // Walk each span, find cross-service parent-child links
-    for (const child of traceSpans) {
-      if (!child.parent_span_id) continue;
-      const parent = spanById.get(child.parent_span_id);
-      if (!parent) continue;
-      if (parent.service_name === child.service_name) continue;
-
-      hasExternalChild.add(parent.span_id);
-
-      // Async messaging: either parent is PRODUCER (4) or child is CONSUMER (5).
-      // We check both to handle mis-parented instrumentation (e.g. consumer span
-      // parented to an HTTP handler instead of the producer span).
-      const isMessaging = parent.span_kind === 4 || child.span_kind === 5;
-
-      if (isMessaging) {
-        const topic = inferMessagingTopic(parent.span_attributes) ?? inferMessagingTopic(child.span_attributes);
-        const system = inferMessagingSystem(parent.span_attributes) ?? inferMessagingSystem(child.span_attributes);
-        const intermediary = messagingNodeName(system, topic);
-        // Error attribution: based on the CLIENT/PRODUCER span's own status,
-        // not the child's. The child's errors belong to the target node.
-        const isError = parent.span_status?.code === 2;
-
-        if (intermediary) {
-          // Split into two async edges: source → topic, topic → dest
-          addEdgeStat(edgeStats, parent.service_name, intermediary, parent.span_duration_millis, isError, "async");
-          addEdgeStat(edgeStats, intermediary, child.service_name, parent.span_duration_millis, isError, "async");
-        } else {
-          // No messaging attrs — direct async edge
-          addEdgeStat(edgeStats, parent.service_name, child.service_name, parent.span_duration_millis, isError, "async");
-        }
-      } else {
-        // Synchronous edge (CLIENT → SERVER or other)
-        // Error attribution: based on the CLIENT/PRODUCER span's own status.
-        addEdgeStat(
-          edgeStats,
-          parent.service_name,
-          child.service_name,
-          parent.span_duration_millis,
-          parent.span_status?.code === 2,
-        );
-      }
-    }
-
-    // For CLIENT/PRODUCER spans (kind 3/4) with no cross-service child,
-    // infer the destination from attributes (e.g. db.system, peer.service)
-    for (const span of traceSpans) {
-      if (span.span_kind !== 3 && span.span_kind !== 4) continue;
-      if (hasExternalChild.has(span.span_id)) continue;
-
-      // PRODUCER with no external child — try messaging attrs first
-      if (span.span_kind === 4) {
-        const topic = inferMessagingTopic(span.span_attributes);
-        const system = inferMessagingSystem(span.span_attributes);
-        const intermediary = messagingNodeName(system, topic);
-        if (intermediary && intermediary !== span.service_name) {
-          addEdgeStat(edgeStats, span.service_name, intermediary, span.span_duration_millis, span.span_status?.code === 2, "async");
-          continue;
-        }
-      }
-
-      const peerName = inferPeerName(span.span_attributes);
-      if (!peerName || peerName === span.service_name) continue;
-      const edgeType: EdgeType = span.span_kind === 4 ? "async" : "sync";
-      addEdgeStat(
-        edgeStats,
-        span.service_name,
-        peerName,
-        span.span_duration_millis,
-        span.span_status?.code === 2,
-        edgeType,
-      );
-    }
-  }
-
+export function parseConnectorEdges(
+  agg: ConnectorAggResponse,
+): AggregatedEdge[] {
   const result: AggregatedEdge[] = [];
-  for (const [key, stats] of edgeStats) {
-    const [source, dest] = key.split("\0");
-    result.push({
-      source,
-      dest,
-      callCount: stats.count,
-      errorCount: stats.errors,
-      avgDurationMs: stats.count > 0 ? Math.round(stats.totalDuration / stats.count) : 0,
-      edgeType: stats.edgeType,
-    });
+  for (const clientBucket of agg.by_client.buckets) {
+    for (const serverBucket of clientBucket.by_server.buckets) {
+      result.push({
+        source: clientBucket.key,
+        dest: serverBucket.key,
+        callCount: Math.round(serverBucket.total_calls?.value ?? 0),
+        errorCount: Math.round(serverBucket.total_errors?.value ?? 0),
+        avgDurationMs: 0, // Connector doesn't provide duration
+        edgeType: "sync",
+      });
+    }
   }
   return result;
 }
 
-// --- Derive per-operation stats for a specific edge from sampled spans ---
+// --- Merge connector edges with peer.service edges ---
 
-export interface DerivedOperation {
-  spanName: string;
-  spanFingerprint: string | null;
-  spanKind: number;
-  count: number;
-  errorCount: number;
-  avgDurationMs: number;
-}
-
-/**
- * For edge sourceService → targetService, walk sampled traces and find
- * cross-service parent-child pairs. Groups by the source-side (CLIENT/PRODUCER)
- * span's operation name — exactly matching how deriveEdgesFromTraces counts.
- */
-export function deriveEdgeOperations(
-  spans: SampledSpan[],
-  sourceService: string,
-  targetService: string,
-): DerivedOperation[] {
-  const traceGroups = new Map<string, SampledSpan[]>();
-  for (const span of spans) {
-    let group = traceGroups.get(span.trace_id);
-    if (!group) {
-      group = [];
-      traceGroups.set(span.trace_id, group);
-    }
-    group.push(span);
-  }
-
-  const opStats = new Map<string, { count: number; errors: number; totalDuration: number; spanKind: number; fingerprint: string | null }>();
-
-  for (const [, traceSpans] of traceGroups) {
-    const spanById = new Map<string, SampledSpan>();
-    for (const span of traceSpans) {
-      spanById.set(span.span_id, span);
-    }
-
-    for (const child of traceSpans) {
-      if (!child.parent_span_id) continue;
-      const parent = spanById.get(child.parent_span_id);
-      if (!parent) continue;
-      if (parent.service_name !== sourceService) continue;
-      if (child.service_name !== targetService) continue;
-
-      // Cross-service span for this edge — group by source-side operation
-      // Error attribution: based on the CLIENT/PRODUCER span's own status.
-      const key = `${parent.span_name}\0${parent.span_kind}`;
-      const isError = parent.span_status?.code === 2;
-      const existing = opStats.get(key);
-      if (existing) {
-        existing.count += 1;
-        existing.errors += isError ? 1 : 0;
-        existing.totalDuration += parent.span_duration_millis;
-      } else {
-        opStats.set(key, {
-          count: 1,
-          errors: isError ? 1 : 0,
-          totalDuration: parent.span_duration_millis,
-          spanKind: parent.span_kind,
-          fingerprint: parent.span_fingerprint,
-        });
-      }
-    }
-  }
-
-  const result: DerivedOperation[] = [];
-  for (const [key, stats] of opStats) {
-    const [spanName] = key.split("\0");
-    result.push({
-      spanName,
-      spanFingerprint: stats.fingerprint,
-      spanKind: stats.spanKind,
-      count: stats.count,
-      errorCount: stats.errors,
-      avgDurationMs: stats.count > 0 ? Math.round(stats.totalDuration / stats.count) : 0,
-    });
-  }
-  result.sort((a, b) => b.count - a.count);
-  return result;
-}
-
-// --- Merge parent-child edges with peer.service edges ---
-
-export function mergeEdges(
-  parentChildEdges: AggregatedEdge[],
-  peerServiceEdges: AggregatedEdge[],
+export function mergeEdgesV2(
+  connectorEdges: AggregatedEdge[],
+  peerEdges: AggregatedEdge[],
   realServiceNames: Set<string>,
 ): AggregatedEdge[] {
-  // Start with all parent-child edges
+  // Start with connector edges (these are the authoritative edges)
   const edgeMap = new Map<string, AggregatedEdge>();
-  for (const edge of parentChildEdges) {
+  for (const edge of connectorEdges) {
     edgeMap.set(`${edge.source}\0${edge.dest}`, edge);
   }
 
   // Add peer.service edges only for destinations that are NOT real services
-  // (i.e., implicit leaves like databases/caches that don't emit their own spans)
-  for (const edge of peerServiceEdges) {
+  // and not already covered by connector edges (i.e., implicit leaves)
+  for (const edge of peerEdges) {
     if (realServiceNames.has(edge.dest)) continue;
     const key = `${edge.source}\0${edge.dest}`;
     if (!edgeMap.has(key)) {
@@ -442,6 +177,7 @@ export function mergeEdges(
 
   return [...edgeMap.values()];
 }
+
 
 // --- Per-node stats ---
 

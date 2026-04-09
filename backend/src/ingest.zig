@@ -5,8 +5,10 @@ const Io = std.Io;
 
 const otlp = @import("proto/opentelemetry/proto/collector/trace/v1.pb.zig");
 const logs_otlp = @import("proto/opentelemetry/proto/collector/logs/v1.pb.zig");
+const metrics_otlp = @import("proto/opentelemetry/proto/collector/metrics/v1.pb.zig");
 const trace_pb = @import("proto/opentelemetry/proto/trace/v1.pb.zig");
 const logs_pb = @import("proto/opentelemetry/proto/logs/v1.pb.zig");
+const metrics_pb = @import("proto/opentelemetry/proto/metrics/v1.pb.zig");
 const common_pb = @import("proto/opentelemetry/proto/common/v1.pb.zig");
 const resource_pb = @import("proto/opentelemetry/proto/resource/v1.pb.zig");
 const Quickwit = @import("quickwit.zig").Quickwit;
@@ -355,6 +357,144 @@ pub fn transformLogsToNdjson(
     return ndjson.writer.buffered();
 }
 
+// -- Metrics ingest (service-edges from servicegraph connector) --
+
+const EdgeDoc = struct {
+    timestamp_nanos: u64,
+    client: []const u8,
+    server: []const u8,
+    connection_type: []const u8,
+    calls: u64,
+    errors: u64,
+};
+
+pub fn handleMetrics(
+    request: *http.Server.Request,
+    arena: Allocator,
+    qw: Quickwit,
+    edges_index_id: []const u8,
+) HandleError!void {
+    // 1. Read request body
+    var body_buf: [8192]u8 = undefined;
+    const body_reader = try request.readerExpectContinue(&body_buf);
+    const body = try body_reader.allocRemaining(arena, max_body_size);
+
+    // 2. Decode protobuf
+    var pb_reader: Io.Reader = .fixed(body);
+    const otlp_request = metrics_otlp.ExportMetricsServiceRequest.decode(&pb_reader, arena) catch {
+        log.err("metrics protobuf decode failed", .{});
+        respondError(request, .bad_request, "Bad Request: invalid protobuf\n");
+        return error.DecodeFailed;
+    };
+
+    // 3. Transform to NDJSON
+    const ndjson = transformMetricsToNdjson(arena, otlp_request) catch {
+        log.err("metrics transform failed", .{});
+        respondError(request, .internal_server_error, "Internal Server Error\n");
+        return error.TransformFailed;
+    };
+
+    // 4. Ingest into Quickwit
+    if (ndjson.len > 0) {
+        qw.ingest(arena, edges_index_id, ndjson) catch {
+            log.err("quickwit metrics ingest failed", .{});
+            respondError(request, .bad_gateway, "Bad Gateway\n");
+            return error.IngestFailed;
+        };
+    }
+
+    // 5. Respond with empty ExportMetricsServiceResponse (encodes to zero bytes)
+    try request.respond("", .{
+        .extra_headers = &.{
+            .{ .name = "content-type", .value = "application/x-protobuf" },
+        },
+    });
+}
+
+pub fn transformMetricsToNdjson(
+    arena: Allocator,
+    request: metrics_otlp.ExportMetricsServiceRequest,
+) ![]const u8 {
+    // Map to correlate total + failed metrics into one EdgeDoc per edge.
+    // Key: "{timestamp}\0{client}\0{server}\0{connection_type}"
+    var edge_map = std.StringHashMap(EdgeDoc).init(arena);
+
+    for (request.resource_metrics.items) |rm| {
+        for (rm.scope_metrics.items) |sm| {
+            for (sm.metrics.items) |metric| {
+                const is_total = std.mem.eql(u8, metric.name, "traces_service_graph_request_total");
+                const is_failed = std.mem.eql(u8, metric.name, "traces_service_graph_request_failed_total");
+                if (!is_total and !is_failed) continue;
+
+                const data = metric.data orelse continue;
+                const sum: metrics_pb.Sum = switch (data) {
+                    .sum => |s| s,
+                    else => continue,
+                };
+
+                for (sum.data_points.items) |dp| {
+                    const client = extractMetricAttr(dp.attributes.items, "client") orelse continue;
+                    const server = extractMetricAttr(dp.attributes.items, "server") orelse continue;
+                    const connection_type = extractMetricAttr(dp.attributes.items, "connection_type") orelse "";
+                    const timestamp = dp.time_unix_nano;
+
+                    const val: u64 = if (dp.value) |v| switch (v) {
+                        .as_int => |i| if (i >= 0) @intCast(i) else 0,
+                        .as_double => |d| @intFromFloat(@max(d, 0)),
+                    } else 0;
+
+                    // Build map key
+                    const key = try std.fmt.allocPrint(arena, "{d}\x00{s}\x00{s}\x00{s}", .{ timestamp, client, server, connection_type });
+
+                    const gop = try edge_map.getOrPut(key);
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = .{
+                            .timestamp_nanos = timestamp,
+                            .client = client,
+                            .server = server,
+                            .connection_type = connection_type,
+                            .calls = 0,
+                            .errors = 0,
+                        };
+                    }
+
+                    if (is_total) {
+                        gop.value_ptr.calls = val;
+                    } else {
+                        gop.value_ptr.errors = val;
+                    }
+                }
+            }
+        }
+    }
+
+    // Serialize edge docs to NDJSON
+    var ndjson: Io.Writer.Allocating = .init(arena);
+    var it = edge_map.valueIterator();
+    while (it.next()) |doc| {
+        try std.json.Stringify.value(doc.*, .{}, &ndjson.writer);
+        try ndjson.writer.writeAll("\n");
+    }
+
+    return ndjson.writer.buffered();
+}
+
+fn extractMetricAttr(attrs: []const common_pb.KeyValue, key: []const u8) ?[]const u8 {
+    for (attrs) |kv| {
+        if (std.mem.eql(u8, kv.key, key)) {
+            if (kv.value) |any_val| {
+                if (any_val.value) |val| {
+                    switch (val) {
+                        .string_value => |s| return s,
+                        else => {},
+                    }
+                }
+            }
+        }
+    }
+    return null;
+}
+
 // -- Helpers --
 
 /// Convert an OTel AnyValue body to a JSON object suitable for Quickwit's `json` field type.
@@ -630,4 +770,107 @@ test "transformLogsToNdjson single log record" {
     try std.testing.expectEqualStrings("0001020304050607", obj.get("span_id").?.string);
     try std.testing.expectEqual(@as(i64, 1), obj.get("trace_flags").?.integer);
     try std.testing.expectEqual(@as(i64, 1700000000000000000), obj.get("timestamp_nanos").?.integer);
+}
+
+test "transformMetricsToNdjson empty request" {
+    const arena = std.testing.allocator;
+    const request = metrics_otlp.ExportMetricsServiceRequest{};
+    const result = try transformMetricsToNdjson(arena, request);
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "transformMetricsToNdjson servicegraph metrics" {
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    // Build data points for request_total
+    var total_attrs: std.ArrayListUnmanaged(common_pb.KeyValue) = .empty;
+    try total_attrs.append(arena, .{ .key = "client", .value = .{ .value = .{ .string_value = "frontend" } } });
+    try total_attrs.append(arena, .{ .key = "server", .value = .{ .value = .{ .string_value = "backend" } } });
+    try total_attrs.append(arena, .{ .key = "connection_type", .value = .{ .value = .{ .string_value = "" } } });
+
+    var total_dps: std.ArrayListUnmanaged(metrics_pb.NumberDataPoint) = .empty;
+    try total_dps.append(arena, .{
+        .attributes = total_attrs,
+        .time_unix_nano = 1700000000000000000,
+        .value = .{ .as_int = 42 },
+    });
+
+    // Build data points for request_failed_total
+    var failed_attrs: std.ArrayListUnmanaged(common_pb.KeyValue) = .empty;
+    try failed_attrs.append(arena, .{ .key = "client", .value = .{ .value = .{ .string_value = "frontend" } } });
+    try failed_attrs.append(arena, .{ .key = "server", .value = .{ .value = .{ .string_value = "backend" } } });
+    try failed_attrs.append(arena, .{ .key = "connection_type", .value = .{ .value = .{ .string_value = "" } } });
+
+    var failed_dps: std.ArrayListUnmanaged(metrics_pb.NumberDataPoint) = .empty;
+    try failed_dps.append(arena, .{
+        .attributes = failed_attrs,
+        .time_unix_nano = 1700000000000000000,
+        .value = .{ .as_int = 3 },
+    });
+
+    // Build metrics
+    var metrics_list: std.ArrayListUnmanaged(metrics_pb.Metric) = .empty;
+    try metrics_list.append(arena, .{
+        .name = "traces_service_graph_request_total",
+        .data = .{ .sum = .{ .data_points = total_dps } },
+    });
+    try metrics_list.append(arena, .{
+        .name = "traces_service_graph_request_failed_total",
+        .data = .{ .sum = .{ .data_points = failed_dps } },
+    });
+
+    var scope_metrics: std.ArrayListUnmanaged(metrics_pb.ScopeMetrics) = .empty;
+    try scope_metrics.append(arena, .{ .metrics = metrics_list });
+
+    var resource_metrics: std.ArrayListUnmanaged(metrics_pb.ResourceMetrics) = .empty;
+    try resource_metrics.append(arena, .{ .scope_metrics = scope_metrics });
+
+    const request = metrics_otlp.ExportMetricsServiceRequest{ .resource_metrics = resource_metrics };
+    const ndjson = try transformMetricsToNdjson(arena, request);
+
+    // Should produce exactly one JSON line (total + failed merged)
+    try std.testing.expect(ndjson.len > 0);
+    try std.testing.expect(ndjson[ndjson.len - 1] == '\n');
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, arena, ndjson[0 .. ndjson.len - 1], .{});
+    const obj = parsed.value.object;
+    try std.testing.expectEqualStrings("frontend", obj.get("client").?.string);
+    try std.testing.expectEqualStrings("backend", obj.get("server").?.string);
+    try std.testing.expectEqual(@as(i64, 42), obj.get("calls").?.integer);
+    try std.testing.expectEqual(@as(i64, 3), obj.get("errors").?.integer);
+    try std.testing.expectEqual(@as(i64, 1700000000000000000), obj.get("timestamp_nanos").?.integer);
+}
+
+test "transformMetricsToNdjson ignores non-servicegraph metrics" {
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var metrics_list: std.ArrayListUnmanaged(metrics_pb.Metric) = .empty;
+    try metrics_list.append(arena, .{
+        .name = "http_server_duration",
+        .data = .{ .sum = .{ .data_points = .empty } },
+    });
+
+    var scope_metrics: std.ArrayListUnmanaged(metrics_pb.ScopeMetrics) = .empty;
+    try scope_metrics.append(arena, .{ .metrics = metrics_list });
+
+    var resource_metrics: std.ArrayListUnmanaged(metrics_pb.ResourceMetrics) = .empty;
+    try resource_metrics.append(arena, .{ .scope_metrics = scope_metrics });
+
+    const request = metrics_otlp.ExportMetricsServiceRequest{ .resource_metrics = resource_metrics };
+    const ndjson = try transformMetricsToNdjson(arena, request);
+    try std.testing.expectEqualStrings("", ndjson);
+}
+
+test "extractMetricAttr" {
+    var attrs_buf: [2]common_pb.KeyValue = .{
+        .{ .key = "client", .value = .{ .value = .{ .string_value = "svc-a" } } },
+        .{ .key = "server", .value = .{ .value = .{ .string_value = "svc-b" } } },
+    };
+    try std.testing.expectEqualStrings("svc-a", extractMetricAttr(&attrs_buf, "client").?);
+    try std.testing.expectEqualStrings("svc-b", extractMetricAttr(&attrs_buf, "server").?);
+    try std.testing.expect(extractMetricAttr(&attrs_buf, "missing") == null);
 }

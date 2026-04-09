@@ -29,6 +29,7 @@ pub const Config = struct {
     quickwit_url: []const u8,
     traces: IndexSettings,
     logs: IndexSettings,
+    edges: IndexSettings,
     serve: ServeConfig = .{},
     /// Tracks which strings were heap-allocated (need freeing).
     owned: OwnedStrings = .{},
@@ -39,6 +40,8 @@ pub const Config = struct {
         traces_retention: bool = false,
         logs_index_id: bool = false,
         logs_retention: bool = false,
+        edges_index_id: bool = false,
+        edges_retention: bool = false,
     };
 
     pub fn deinit(self: Config, allocator: Allocator) void {
@@ -47,6 +50,8 @@ pub const Config = struct {
         if (self.owned.traces_retention) allocator.free(self.traces.retention.?);
         if (self.owned.logs_index_id) allocator.free(self.logs.index_id);
         if (self.owned.logs_retention) allocator.free(self.logs.retention.?);
+        if (self.owned.edges_index_id) allocator.free(self.edges.index_id);
+        if (self.owned.edges_retention) allocator.free(self.edges.retention.?);
     }
 };
 
@@ -54,6 +59,7 @@ pub const defaults = Config{
     .quickwit_url = "http://localhost:7280",
     .traces = .{ .index_id = "winnow-traces-v0_1" },
     .logs = .{ .index_id = "winnow-logs-v0_1" },
+    .edges = .{ .index_id = "winnow-edges-v0_1" },
 };
 
 pub const CliResult = struct {
@@ -137,6 +143,12 @@ pub fn load(allocator: Allocator, cli_config_path: ?[]const u8, explicit: bool) 
         cfg.owned.logs_index_id = true;
     } else |_| {}
 
+    if (std.process.getEnvVarOwned(allocator, "WINNOW_EDGES_INDEX")) |idx| {
+        if (cfg.owned.edges_index_id) allocator.free(cfg.edges.index_id);
+        cfg.edges.index_id = idx;
+        cfg.owned.edges_index_id = true;
+    } else |_| {}
+
     return cfg;
 }
 
@@ -186,6 +198,19 @@ fn parseKdl(allocator: Allocator, source: []const u8, base: Config) !Config {
                 if (cfg.owned.logs_retention) allocator.free(cfg.logs.retention.?);
                 cfg.logs.retention = duped;
                 cfg.owned.logs_retention = true;
+            }
+        } else if (std.mem.eql(u8, name, "edges")) {
+            if (getStringProp(&doc, node, "index")) |idx| {
+                const duped = try allocator.dupe(u8, idx);
+                if (cfg.owned.edges_index_id) allocator.free(cfg.edges.index_id);
+                cfg.edges.index_id = duped;
+                cfg.owned.edges_index_id = true;
+            }
+            if (getStringProp(&doc, node, "retention")) |ret| {
+                const duped = try allocator.dupe(u8, ret);
+                if (cfg.owned.edges_retention) allocator.free(cfg.edges.retention.?);
+                cfg.edges.retention = duped;
+                cfg.owned.edges_retention = true;
             }
         } else if (std.mem.eql(u8, name, "serve")) {
             // Start with both disabled; only listed children are enabled
@@ -288,6 +313,7 @@ test "parseKdl full config" {
         \\quickwit url="http://example.com:7280"
         \\traces index="my-traces" retention="90 days"
         \\logs index="my-logs" retention="30 days"
+        \\edges index="my-edges" retention="7 days"
     ;
 
     const cfg = try parseKdl(allocator, source, defaults);
@@ -298,6 +324,8 @@ test "parseKdl full config" {
     try std.testing.expectEqualStrings("90 days", cfg.traces.retention.?);
     try std.testing.expectEqualStrings("my-logs", cfg.logs.index_id);
     try std.testing.expectEqualStrings("30 days", cfg.logs.retention.?);
+    try std.testing.expectEqualStrings("my-edges", cfg.edges.index_id);
+    try std.testing.expectEqualStrings("7 days", cfg.edges.retention.?);
 }
 
 test "parseKdl partial config uses defaults" {
@@ -313,9 +341,11 @@ test "parseKdl partial config uses defaults" {
     try std.testing.expectEqualStrings("http://localhost:7280", cfg.quickwit_url);
     try std.testing.expectEqualStrings("winnow-traces-v0_1", cfg.traces.index_id);
     try std.testing.expectEqualStrings("winnow-logs-v0_1", cfg.logs.index_id);
+    try std.testing.expectEqualStrings("winnow-edges-v0_1", cfg.edges.index_id);
     // Retention should be set
     try std.testing.expectEqualStrings("60 days", cfg.traces.retention.?);
     try std.testing.expect(cfg.logs.retention == null);
+    try std.testing.expect(cfg.edges.retention == null);
 }
 
 test "parseKdl empty config uses all defaults" {
@@ -326,16 +356,20 @@ test "parseKdl empty config uses all defaults" {
     try std.testing.expectEqualStrings(defaults.quickwit_url, cfg.quickwit_url);
     try std.testing.expectEqualStrings(defaults.traces.index_id, cfg.traces.index_id);
     try std.testing.expectEqualStrings(defaults.logs.index_id, cfg.logs.index_id);
+    try std.testing.expectEqualStrings(defaults.edges.index_id, cfg.edges.index_id);
     try std.testing.expect(cfg.traces.retention == null);
     try std.testing.expect(cfg.logs.retention == null);
+    try std.testing.expect(cfg.edges.retention == null);
 }
 
 test "defaults have expected values" {
     try std.testing.expectEqualStrings("http://localhost:7280", defaults.quickwit_url);
     try std.testing.expectEqualStrings("winnow-traces-v0_1", defaults.traces.index_id);
     try std.testing.expectEqualStrings("winnow-logs-v0_1", defaults.logs.index_id);
+    try std.testing.expectEqualStrings("winnow-edges-v0_1", defaults.edges.index_id);
     try std.testing.expect(defaults.traces.retention == null);
     try std.testing.expect(defaults.logs.retention == null);
+    try std.testing.expect(defaults.edges.retention == null);
     // Default serve: both enabled on 8080
     try std.testing.expect(defaults.serve.collector != null);
     try std.testing.expect(defaults.serve.api != null);

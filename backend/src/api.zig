@@ -11,6 +11,7 @@ const max_body_size: Io.Limit = .limited(1024 * 1024); // 1 MiB
 pub const IndexConfig = struct {
     traces: []const u8,
     logs: []const u8,
+    edges: []const u8,
 };
 
 /// Handle all /api/ routes. Dispatches to search or metadata handlers.
@@ -59,7 +60,7 @@ pub fn handleApi(
         if (request.head.method != .POST) {
             return respondError(request, .method_not_allowed, "method not allowed");
         }
-        return handleServiceGraph(request, arena, qw, indexes.traces);
+        return handleServiceGraph(request, arena, qw, indexes);
     }
 
     return respondError(request, .not_found, "not found");
@@ -121,14 +122,11 @@ fn handleSearch(
     });
 }
 
-const trace_sample_size = 200;
-const max_sampled_spans = 5000;
-
 fn handleServiceGraph(
     request: *http.Server.Request,
     arena: Allocator,
     qw: Quickwit,
-    index_id: []const u8,
+    indexes: *const IndexConfig,
 ) !void {
     // Read POST body — extract "query" field
     var buf: [4096]u8 = undefined;
@@ -141,12 +139,12 @@ fn handleServiceGraph(
         return respondError(request, .bad_request, "missing query field");
     };
 
-    // Query A: SERVER/CONSUMER spans — trace IDs + service stats + error breakdown
+    // Query A: SERVER/CONSUMER spans — service stats + error breakdown
     const svc_query_json = try std.fmt.allocPrint(arena,
-        \\{{"query":"(span_kind:2 OR span_kind:5) AND ({s})","max_hits":0,"aggs":{{"trace_ids":{{"terms":{{"field":"trace_id","size":{d}}}}},"services":{{"terms":{{"field":"service_name","size":200}},"aggs":{{"avg_duration":{{"avg":{{"field":"span_duration_millis"}}}},"by_status":{{"terms":{{"field":"span_status.code","size":10}}}}}}}}}}}}
-    , .{ user_query, trace_sample_size });
+        \\{{"query":"(span_kind:2 OR span_kind:5) AND ({s})","max_hits":0,"aggs":{{"services":{{"terms":{{"field":"service_name","size":200}},"aggs":{{"avg_duration":{{"avg":{{"field":"span_duration_millis"}}}},"by_status":{{"terms":{{"field":"span_status.code","size":10}}}}}}}}}}}}
+    , .{user_query});
 
-    const svc_result = qw.searchRaw(arena, index_id, svc_query_json) catch {
+    const svc_result = qw.searchRaw(arena, indexes.traces, svc_query_json) catch {
         return respondError(request, .bad_gateway, "service query failed");
     };
     if (svc_result.status != .ok) {
@@ -159,7 +157,7 @@ fn handleServiceGraph(
         \\{{"query":"(span_kind:3 OR span_kind:4) AND ({s})","max_hits":0,"aggs":{{"edges":{{"terms":{{"field":"service_name","size":200}},"aggs":{{"dests":{{"terms":{{"field":"span_attributes.peer.service","size":200}},"aggs":{{"avg_duration":{{"avg":{{"field":"span_duration_millis"}}}},"by_status":{{"terms":{{"field":"span_status.code","size":10}}}}}}}}}}}}}}}}
     , .{user_query});
 
-    const edge_result = qw.searchRaw(arena, index_id, edge_query_json) catch {
+    const edge_result = qw.searchRaw(arena, indexes.traces, edge_query_json) catch {
         return respondError(request, .bad_gateway, "edge query failed");
     };
     if (edge_result.status != .ok) {
@@ -167,46 +165,50 @@ fn handleServiceGraph(
         return respondError(request, .bad_gateway, "edge query failed");
     }
 
-    // Extract trace IDs from svc_result for span fetch
-    const trace_ids = extractTraceIds(arena, svc_result.body) catch |err| {
-        log.warn("failed to extract trace IDs: {}", .{err});
-        // Return what we have without spans
-        return respondServiceGraph(request, arena, svc_result.body, edge_result.body, "{\"num_hits\":0,\"hits\":[]}");
-    };
+    // Query E: Connector edges from service-edges index
+    const edges_index_query = buildEdgesIndexQuery(arena, user_query) catch "*";
+    const connector_query_json = try std.fmt.allocPrint(arena,
+        \\{{"query":"{s}","max_hits":0,"aggs":{{"by_client":{{"terms":{{"field":"client","size":200}},"aggs":{{"by_server":{{"terms":{{"field":"server","size":200}},"aggs":{{"total_calls":{{"sum":{{"field":"calls"}}}},"total_errors":{{"sum":{{"field":"errors"}}}}}}}}}}}}}}}}
+    , .{edges_index_query});
 
-    if (trace_ids.len == 0) {
-        return respondServiceGraph(request, arena, svc_result.body, edge_result.body, "{\"num_hits\":0,\"hits\":[]}");
+    // Graceful fallback: if edges index query fails, return empty connector agg
+    const empty_connector = "{\"num_hits\":0,\"hits\":[],\"aggregations\":{\"by_client\":{\"buckets\":[]}}}";
+    const connector_result = qw.searchRaw(arena, indexes.edges, connector_query_json) catch {
+        log.debug("connector edge query failed, returning empty", .{});
+        return respondServiceGraphV2(request, arena, svc_result.body, edge_result.body, empty_connector);
+    };
+    if (connector_result.status != .ok) {
+        log.debug("connector edge query returned {d}, returning empty", .{@intFromEnum(connector_result.status)});
+        return respondServiceGraphV2(request, arena, svc_result.body, edge_result.body, empty_connector);
     }
 
-    // Build span fetch query: "trace_id:abc OR trace_id:def"
-    const trace_query = try buildTraceIdQuery(arena, trace_ids);
-    const span_query_json = try std.fmt.allocPrint(arena,
-        \\{{"query":"{s}","max_hits":{d}}}
-    , .{ trace_query, max_sampled_spans });
-
-    const span_result = qw.searchRaw(arena, index_id, span_query_json) catch {
-        log.warn("span fetch failed, returning without spans", .{});
-        return respondServiceGraph(request, arena, svc_result.body, edge_result.body, "{\"num_hits\":0,\"hits\":[]}");
-    };
-    if (span_result.status != .ok) {
-        log.warn("Quickwit returned {d} for span fetch", .{@intFromEnum(span_result.status)});
-        return respondServiceGraph(request, arena, svc_result.body, edge_result.body, "{\"num_hits\":0,\"hits\":[]}");
-    }
-
-    return respondServiceGraph(request, arena, svc_result.body, edge_result.body, span_result.body);
+    return respondServiceGraphV2(request, arena, svc_result.body, edge_result.body, connector_result.body);
 }
 
-fn respondServiceGraph(
+fn respondServiceGraphV2(
     request: *http.Server.Request,
     arena: Allocator,
     svc_body: []const u8,
     edge_body: []const u8,
-    span_body: []const u8,
+    connector_body: []const u8,
 ) !void {
     const combined = try std.fmt.allocPrint(arena,
-        \\{{"svc":{s},"edges":{s},"spans":{s}}}
-    , .{ svc_body, edge_body, span_body });
+        \\{{"svc":{s},"edges":{s},"connector":{s}}}
+    , .{ svc_body, edge_body, connector_body });
     return respondJson(request, combined);
+}
+
+/// Extract timestamp range from user query and adapt for the edges index.
+/// User query contains "span_start_timestamp_nanos:[X TO Y]".
+/// We rewrite to "timestamp_nanos:[X TO Y]" for the edges index.
+/// Returns "*" if no time range found.
+pub fn buildEdgesIndexQuery(arena: Allocator, user_query: []const u8) ![]const u8 {
+    const needle = "span_start_timestamp_nanos:[";
+    const start = std.mem.indexOf(u8, user_query, needle) orelse return "*";
+    const range_start = start + needle.len;
+    const end = std.mem.indexOfPos(u8, user_query, range_start, "]") orelse return "*";
+    const range_contents = user_query[range_start..end];
+    return std.fmt.allocPrint(arena, "timestamp_nanos:[{s}]", .{range_contents});
 }
 
 /// Extract the "query" field value from a JSON body like {"query":"..."}.
@@ -230,51 +232,6 @@ fn extractQueryField(body: []const u8) ?[]const u8 {
         i += 1;
     }
     return null;
-}
-
-/// Extract trace IDs from svc_result JSON: aggregations.trace_ids.buckets[].key
-fn extractTraceIds(arena: Allocator, body: []const u8) ![]const []const u8 {
-    const parsed = std.json.parseFromSlice(std.json.Value, arena, body, .{}) catch return error.JsonParseFailed;
-
-    const root = parsed.value;
-    const aggs = root.object.get("aggregations") orelse return error.JsonParseFailed;
-    const trace_ids_agg = aggs.object.get("trace_ids") orelse return error.JsonParseFailed;
-    const buckets_val = trace_ids_agg.object.get("buckets") orelse return error.JsonParseFailed;
-    const buckets = buckets_val.array;
-
-    var ids = try std.ArrayList([]const u8).initCapacity(arena, buckets.items.len);
-    for (buckets.items) |bucket| {
-        const key = bucket.object.get("key") orelse continue;
-        switch (key) {
-            .string => |s| ids.appendAssumeCapacity(s),
-            else => continue,
-        }
-    }
-    return ids.items;
-}
-
-/// Build "trace_id:abc OR trace_id:def" query string.
-fn buildTraceIdQuery(arena: Allocator, trace_ids: []const []const u8) ![]const u8 {
-    // Calculate total length: "trace_id:" (9) + id.len + " OR " (4) between each
-    var total_len: usize = 0;
-    for (trace_ids, 0..) |id, i| {
-        if (i > 0) total_len += 4; // " OR "
-        total_len += 9 + id.len; // "trace_id:" + id
-    }
-
-    const result = try arena.alloc(u8, total_len);
-    var pos: usize = 0;
-    for (trace_ids, 0..) |id, i| {
-        if (i > 0) {
-            @memcpy(result[pos..][0..4], " OR ");
-            pos += 4;
-        }
-        @memcpy(result[pos..][0..9], "trace_id:");
-        pos += 9;
-        @memcpy(result[pos..][0..id.len], id);
-        pos += id.len;
-    }
-    return result;
 }
 
 fn respondJson(request: *http.Server.Request, body: []const u8) !void {
@@ -350,40 +307,27 @@ test "extractQueryField with escaped quotes" {
     try std.testing.expectEqualStrings("foo:\\\"bar\\\"", result.?);
 }
 
-test "extractTraceIds" {
+test "buildEdgesIndexQuery with time range" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const body =
-        \\{"num_hits":100,"aggregations":{"trace_ids":{"buckets":[{"key":"abc123","doc_count":5},{"key":"def456","doc_count":3}]}}}
-    ;
-    const ids = try extractTraceIds(arena, body);
-    try std.testing.expectEqual(@as(usize, 2), ids.len);
-    try std.testing.expectEqualStrings("abc123", ids[0]);
-    try std.testing.expectEqualStrings("def456", ids[1]);
+    const query = "span_start_timestamp_nanos:[2024-01-01T00:00:00Z TO 2024-01-02T00:00:00Z] AND service_name:foo";
+    const result = try buildEdgesIndexQuery(arena, query);
+    try std.testing.expectEqualStrings("timestamp_nanos:[2024-01-01T00:00:00Z TO 2024-01-02T00:00:00Z]", result);
 }
 
-test "extractTraceIds empty buckets" {
+test "buildEdgesIndexQuery without time range" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const body =
-        \\{"num_hits":0,"aggregations":{"trace_ids":{"buckets":[]}}}
-    ;
-    const ids = try extractTraceIds(arena, body);
-    try std.testing.expectEqual(@as(usize, 0), ids.len);
+    const result = try buildEdgesIndexQuery(arena, "service_name:foo");
+    try std.testing.expectEqualStrings("*", result);
 }
 
-test "buildTraceIdQuery" {
-    const ids = [_][]const u8{ "abc", "def", "ghi" };
-    const result = try buildTraceIdQuery(std.testing.allocator, &ids);
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("trace_id:abc OR trace_id:def OR trace_id:ghi", result);
-}
-
-test "buildTraceIdQuery single" {
-    const ids = [_][]const u8{"abc123"};
-    const result = try buildTraceIdQuery(std.testing.allocator, &ids);
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("trace_id:abc123", result);
+test "buildEdgesIndexQuery star query" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const result = try buildEdgesIndexQuery(arena, "*");
+    try std.testing.expectEqualStrings("*", result);
 }

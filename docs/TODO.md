@@ -245,8 +245,30 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Add `POST /api/v1/service-graph` backend endpoint — issues 3 sequential Quickwit queries (svc aggs, edge aggs, span fetch), returns combined JSON
 - [x] Add `fetchServiceGraph()` to frontend API client
 - [x] Replace 5+1 query pattern in `service-map.tsx` with single `fetchServiceGraph()` call
-- [x] Backend helper functions: `extractQueryField`, `extractTraceIds`, `buildTraceIdQuery` with unit tests
+- [x] Backend helper functions: `extractQueryField`, `buildEdgesIndexQuery` with unit tests
 - [x] Verify: `zig build test` passes
 - [x] Verify: `pnpm build` succeeds with no TS errors
 - [ ] Verify: service map loads with single `/api/v1/service-graph` request in Network tab
 - [ ] Verify: service map renders correctly — same nodes, edges, error rates, call counts
+
+## Service-Edges Index (Servicegraph Connector)
+
+- [x] Vendor OTel metrics protos (`metrics/v1/metrics.proto`, `collector/metrics/v1/metrics_service.proto`)
+- [x] Add metrics proto to `build.zig` protoc invocation
+- [x] Create `service_edges_index.zig` — 6-field edge index schema (timestamp_nanos, client, server, connection_type, calls, errors)
+- [x] Add `edges` IndexSettings to `config.zig` (default: `winnow-edges-v0_1`, env: `WINNOW_EDGES_INDEX`, KDL `edges` block)
+- [x] Add `handleMetrics` + `transformMetricsToNdjson` to `ingest.zig` — filters for `traces_service_graph_request_total` / `_failed_total` Sum metrics, correlates by timestamp+client+server+connection_type
+- [x] Add `POST /v1/metrics` route to `worker.zig`
+- [x] Add `edges` to `IndexConfig`, ensure edges index on startup in `main.zig`
+- [x] Rewrite `handleServiceGraph` in `api.zig` — replaces span fetch (Query C) with edges index query (Query E); graceful fallback if edges index empty/missing
+- [x] Add `buildEdgesIndexQuery` helper — extracts time range from user query, rewrites for edges index
+- [x] Frontend: add `parseConnectorEdges`, `mergeEdgesV2`, `ConnectorAggResponse` types
+- [x] Frontend: replace span-based edge derivation with connector edge parsing in `service-map.tsx`
+- [x] Frontend: remove `sampledSpans` prop and client-side derivation path from `operations-drilldown.tsx`
+- [x] Frontend: remove dead code (`deriveEdgesFromTraces`, `deriveEdgeOperations`, `mergeEdges`, `SampledSpan`, messaging helpers)
+- [x] Verify: `zig build test` passes
+- [x] Verify: `pnpm build` succeeds with no TS errors
+- [ ] Verify: start winnow → edges index created automatically
+- [ ] Verify: service map loads without errors (connector empty → falls back to peer.service edges)
+- [ ] Verify: configure OTel collector with servicegraph connector → metrics flow to `/v1/metrics` → edges appear in index
+- [ ] Verify: service map shows connector edges + peer.service implicit leaves

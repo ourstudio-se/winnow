@@ -36,16 +36,16 @@ import {
   type AggregatedEdge,
   type EdgesAggResponse,
   type ServiceAggResponse,
+  type ConnectorAggResponse,
   type ServiceKind,
   type ServiceStats,
   type ServiceEdgeData,
-  type SampledSpan,
   type ForceNode,
   formatDuration,
   errorCountFromStatus,
   parseEdgesFromAggs,
-  deriveEdgesFromTraces,
-  mergeEdges,
+  parseConnectorEdges,
+  mergeEdgesV2,
   computeServiceStats,
   computeDepths,
   computeForceLayout,
@@ -347,9 +347,6 @@ export function ServiceMapView() {
     realServiceNames: Set<string>;
   } | null>(null);
 
-  // Store sampled spans for edge operations drilldown (same data as edge counts)
-  const sampledSpansRef = useRef<SampledSpan[]>([]);
-
   // Simulation refs
   const simRef = useRef<Simulation<ForceNode, SimulationLinkDatum<ForceNode>> | null>(null);
   const simNodeMapRef = useRef(new Map<string, ForceNode>());
@@ -568,20 +565,22 @@ export function ServiceMapView() {
         // Single backend call handles all 3 Quickwit queries
         const resp = await fetchServiceGraph(query);
 
-        // Parse sampled spans from span fetch
-        const sampledSpans = (resp.spans.hits as unknown as SampledSpan[]) ?? [];
-        sampledSpansRef.current = sampledSpans;
-
-        // Derive edges from parent-child relationships
-        const pcEdges = deriveEdgesFromTraces(sampledSpans);
-        const realServiceNames = new Set(sampledSpans.map((s) => s.service_name));
+        // Parse connector edges from servicegraph connector metrics
+        const connectorAgg = resp.connector.aggregations as unknown as ConnectorAggResponse | undefined;
+        const connectorEdges = connectorAgg?.by_client ? parseConnectorEdges(connectorAgg) : [];
 
         // Parse peer.service edges from edge aggregations (single response with by_status)
         const edgeAgg = resp.edges.aggregations as unknown as EdgesAggResponse;
         const peerEdges = parseEdgesFromAggs(edgeAgg);
 
-        // Merge: parent-child takes priority, peer.service only for implicit leaves
-        const aggregated = mergeEdges(pcEdges, peerEdges, realServiceNames);
+        // Real service names = services with SERVER/CONSUMER spans (from svc agg)
+        const svcAggForNames = resp.svc.aggregations as unknown as ServiceAggResponse;
+        const realServiceNames = new Set(svcAggForNames.services.buckets.map((b) => b.key));
+
+        // Merge: connector edges take priority, peer.service fills implicit leaves
+        const aggregated = connectorEdges.length > 0
+          ? mergeEdgesV2(connectorEdges, peerEdges, realServiceNames)
+          : peerEdges;
 
         // Per-service stats from svc aggregations (single response with by_status)
         const svcAgg = resp.svc.aggregations as unknown as ServiceAggResponse;
@@ -722,7 +721,6 @@ export function ServiceMapView() {
               errorsOnly={drilldown.errorsOnly}
               isImplicit={drilldown.isImplicit}
               sourceService={drilldown.sourceService}
-              sampledSpans={sampledSpansRef.current}
               onClose={() => setDrilldown(null)}
               onToggleErrorsOnly={(errorsOnly) =>
                 setDrilldown((prev) => (prev ? { ...prev, errorsOnly } : null))
