@@ -3,5 +3,5 @@ serve {
   api
 }
 
-traces index="winnow-traces-v0_1-foo" retention="90 days"
-logs index="winnow-logs-v0_1-foo" retention="30 days"
+traces index="winnow-traces-v0_2" retention="90 days"
+logs index="winnow-logs-v0_2" retention="30 days"

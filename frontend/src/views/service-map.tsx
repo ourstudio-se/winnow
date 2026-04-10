@@ -119,6 +119,7 @@ function buildGraph(
       errorCount: e.errorCount,
       avgDurationMs: e.avgDurationMs,
       edgeType: e.edgeType,
+      clientFingerprints: e.clientFingerprints,
       serverFingerprints: e.serverFingerprints,
     },
   }));
@@ -329,13 +330,13 @@ export function ServiceMapView() {
     hasErrors: boolean;
     hasCalls: boolean;
     isImplicit: boolean;
-    serviceKind: ServiceKind;
   } | null>(null);
   const [drilldown, setDrilldown] = useState<{
     serviceName: string;
     errorsOnly: boolean;
     isImplicit: boolean;
     sourceService?: string;
+    clientFingerprints?: string[];
     serverFingerprints?: string[];
   } | null>(null);
 
@@ -519,7 +520,6 @@ export function ServiceMapView() {
         hasErrors: node.data.totalErrors > 0,
         hasCalls: node.data.totalCalls > 0,
         isImplicit: node.data.isImplicit,
-        serviceKind: node.data.serviceKind,
       });
     },
     [],
@@ -545,6 +545,7 @@ export function ServiceMapView() {
         errorsOnly: false,
         isImplicit,
         sourceService: edge.source,
+        clientFingerprints: edge.data?.clientFingerprints,
         serverFingerprints: edge.data?.serverFingerprints,
       });
     },
@@ -729,6 +730,7 @@ export function ServiceMapView() {
               errorsOnly={drilldown.errorsOnly}
               isImplicit={drilldown.isImplicit}
               sourceService={drilldown.sourceService}
+              clientFingerprints={drilldown.clientFingerprints}
               serverFingerprints={drilldown.serverFingerprints}
               onClose={() => setDrilldown(null)}
               onToggleErrorsOnly={(errorsOnly) =>
@@ -746,7 +748,6 @@ export function ServiceMapView() {
           hasErrors={contextMenu.hasErrors}
           hasCalls={contextMenu.hasCalls}
           isImplicit={contextMenu.isImplicit}
-          serviceKind={contextMenu.serviceKind}
           onClose={() => setContextMenu(null)}
           onDrilldown={(errorsOnly) =>
             setDrilldown({

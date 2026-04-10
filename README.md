@@ -77,7 +77,7 @@ Configuration is resolved in order: defaults < KDL config file < environment var
 quickwit url="http://localhost:7280"
 traces index="winnow-traces-v0_1" retention="90 days"
 logs index="winnow-logs-v0_1" retention="30 days"
-edges index="winnow-edges-v0_2" retention="7 days"
+edges index="winnow-edges-v0_3" retention="7 days"
 ```
 
 Pass with `--config`:
@@ -130,7 +130,7 @@ When a component is disabled, its routes return 404. A `serve` block with no chi
 QUICKWIT_URL            Quickwit base URL (default: http://localhost:7280)
 WINNOW_TRACES_INDEX     Quickwit index for traces (default: winnow-traces-v0_1)
 WINNOW_LOGS_INDEX       Quickwit index for logs (default: winnow-logs-v0_1)
-WINNOW_EDGES_INDEX      Quickwit index for service edges (default: winnow-edges-v0_2)
+WINNOW_EDGES_INDEX      Quickwit index for service edges (default: winnow-edges-v0_3)
 ```
 
 **Startup behavior:**

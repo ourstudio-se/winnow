@@ -10,6 +10,7 @@ export interface AggregatedEdge {
   avgDurationMs: number;
   edgeType: EdgeType;
   connectionType?: string;
+  clientFingerprints?: string[];
   serverFingerprints?: string[];
 }
 
@@ -63,6 +64,7 @@ export type ServiceEdgeData = {
   errorCount: number;
   avgDurationMs: number;
   edgeType: EdgeType;
+  clientFingerprints?: string[];
   serverFingerprints?: string[];
 };
 
@@ -74,6 +76,7 @@ interface ConnectorServerBucket {
   total_calls: { value: number };
   total_errors: { value: number };
   conn_type?: { buckets: { key: string; doc_count: number }[] };
+  by_client_fp?: { buckets: { key: string; doc_count: number }[] };
   by_server_fp?: { buckets: { key: string; doc_count: number }[] };
 }
 
@@ -150,14 +153,17 @@ export function parseConnectorEdges(
 ): AggregatedEdge[] {
   const result: AggregatedEdge[] = [];
   for (const clientBucket of agg.by_client.buckets) {
-    if (clientBucket.key === "unknown") continue;
+    if (clientBucket.key === "unknown" || clientBucket.key === "user") continue;
     for (const serverBucket of clientBucket.by_server.buckets) {
       if (serverBucket.key === "unknown") continue;
       // Pick the most common non-empty connection_type
       const connType = serverBucket.conn_type?.buckets
         ?.filter((b) => b.key !== "" && b.key !== "virtual_node")
         ?.sort((a, b) => b.doc_count - a.doc_count)[0]?.key;
-      // Extract server fingerprints, filtering out empty strings
+      // Extract fingerprints, filtering out empty strings
+      const clientFingerprints = serverBucket.by_client_fp?.buckets
+        ?.map((b) => b.key)
+        .filter((k) => k !== "") ?? [];
       const serverFingerprints = serverBucket.by_server_fp?.buckets
         ?.map((b) => b.key)
         .filter((k) => k !== "") ?? [];
@@ -167,8 +173,9 @@ export function parseConnectorEdges(
         callCount: Math.round(serverBucket.total_calls?.value ?? 0),
         errorCount: Math.round(serverBucket.total_errors?.value ?? 0),
         avgDurationMs: 0, // Connector doesn't provide duration
-        edgeType: "sync",
+        edgeType: connType === "messaging_system" ? "async" : "sync",
         connectionType: connType,
+        ...(clientFingerprints.length > 0 ? { clientFingerprints } : {}),
         ...(serverFingerprints.length > 0 ? { serverFingerprints } : {}),
       });
     }

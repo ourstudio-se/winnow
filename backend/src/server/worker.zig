@@ -60,7 +60,7 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, conn: std.net.Ser
         return;
     };
 
-    std.log.debug("request received - {s}, ctx: {}", .{ request.head.target, worker.server.opts.roles });
+    // std.log.debug("request received - {s}, ctx: {}", .{ request.head.target, worker.server.opts.roles });
 
     const pathType = enum {
         @"/v1/traces",

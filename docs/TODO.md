@@ -256,7 +256,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Vendor OTel metrics protos (`metrics/v1/metrics.proto`, `collector/metrics/v1/metrics_service.proto`)
 - [x] Add metrics proto to `build.zig` protoc invocation
 - [x] Create `service_edges_index.zig` — 6-field edge index schema (timestamp_nanos, client, server, connection_type, calls, errors)
-- [x] Add `edges` IndexSettings to `config.zig` (default: `winnow-edges-v0_2`, env: `WINNOW_EDGES_INDEX`, KDL `edges` block)
+- [x] Add `edges` IndexSettings to `config.zig` (default: `winnow-edges-v0_3`, env: `WINNOW_EDGES_INDEX`, KDL `edges` block)
 - [x] Add `handleMetrics` + `transformMetricsToNdjson` to `ingest.zig` — filters for `traces_service_graph_request_total` / `_failed_total` Sum metrics, correlates by timestamp+client+server+connection_type
 - [x] Add `POST /v1/metrics` route to `worker.zig`
 - [x] Add `edges` to `IndexConfig`, ensure edges index on startup in `main.zig`
@@ -279,16 +279,18 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Update `EdgeDoc` in `ingest.zig` with fingerprint fields
 - [x] Extract `client_span.operation` / `server_span.operation` from servicegraph connector metric attributes
 - [x] Compute fingerprints via `computeFingerprint(service, operation, kind)` — CLIENT/PRODUCER for client, SERVER/CONSUMER for server; messaging uses kind 4/5
-- [x] Extend edge map key to include operations for per-operation-pair granularity
-- [x] Add `by_server_fp` terms sub-agg under `by_server` in connector query (`api.zig`)
-- [x] Add `serverFingerprints` to `AggregatedEdge`, `ServiceEdgeData`, and `ConnectorServerBucket` types
-- [x] Parse `by_server_fp` buckets in `parseConnectorEdges`, filter out empty strings
-- [x] Thread `serverFingerprints` through `buildGraph` → edge data → drilldown state → `OperationsDrilldownPanel` prop
-- [x] Drilldown filter: when `sourceService` set + NOT implicit + fingerprints present, scope query with `span_fingerprint:("fp1" OR "fp2" OR ...)`
+- [x] Add `by_client_fp` and `by_server_fp` terms sub-aggs under `by_server` in connector query (`api.zig`)
+- [x] Add `clientFingerprints` and `serverFingerprints` to `AggregatedEdge`, `ServiceEdgeData`, and `ConnectorServerBucket` types
+- [x] Parse `by_client_fp` and `by_server_fp` buckets in `parseConnectorEdges`, filter out empty strings
+- [x] Thread fingerprints through `buildGraph` → edge data → drilldown state → `OperationsDrilldownPanel` prop
+- [x] Drilldown filter: edge clicks use CLIENT/PRODUCER spans on source with client fingerprints; falls back to server fingerprints or peer.service/db.system for implicit targets
 - [x] Backend tests: existing test updated (empty fingerprints), new test with operation dimensions (16-char hex fingerprints)
+- [x] Fix messaging edge type: `parseConnectorEdges` checks `connection_type === "messaging_system"` for async edges
+- [x] Fix edge label counts: aggregate calls/errors across operations per edge (not per-operation docs); fingerprints stored as arrays per edge doc
 - [x] Verify: `zig build test` passes
 - [x] Verify: `npx tsc --noEmit` passes
 - [x] Verify: `pnpm build` succeeds
-- [ ] Verify: delete existing `winnow-edges-v0_2` index, restart backend — new 8-field index created
+- [ ] Verify: delete existing `winnow-edges-v0_3` index, restart backend — new 8-field index created
 - [ ] Verify: edge docs have non-empty fingerprints after servicegraph connector sends metrics with `dimensions: ["span.operation"]`
 - [ ] Verify: clicking a real→real edge shows only operations flowing through that edge (not all SERVER ops)
+- [ ] Verify: edge labels show correct call counts on real→real edges (matching drilldown panel)

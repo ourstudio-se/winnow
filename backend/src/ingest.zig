@@ -93,7 +93,7 @@ pub fn handleTraces(
         return error.TransformFailed;
     };
 
-    std.log.debug("ndjson: {s}", .{ndjson});
+    // std.log.debug("ndjson: {s}", .{ndjson});
 
     // 4. Ingest into Quickwit
     if (ndjson.len > 0) {
@@ -111,7 +111,7 @@ pub fn handleTraces(
         },
     });
 
-    std.log.debug("finished ingesting trace", .{});
+    // std.log.debug("finished ingesting trace", .{});
 }
 
 pub fn handleLogs(
@@ -219,8 +219,6 @@ fn buildSpanDoc(
         .code = @intCast(@intFromEnum(s.code)),
         .message = s.message,
     } else null) else null;
-
-    std.log.debug("status_doc: {?}", .{status_doc});
 
     return .{
         .trace_id = trace_id,
@@ -366,8 +364,8 @@ const EdgeDoc = struct {
     connection_type: []const u8,
     calls: u64,
     errors: u64,
-    client_fingerprint: []const u8,
-    server_fingerprint: []const u8,
+    client_fingerprint: []const []const u8,
+    server_fingerprint: []const []const u8,
 };
 
 pub fn handleMetrics(
@@ -381,6 +379,8 @@ pub fn handleMetrics(
     const body_reader = try request.readerExpectContinue(&body_buf);
     const body = try body_reader.allocRemaining(arena, max_body_size);
 
+    std.log.debug("body: {s}", .{body});
+
     // 2. Decode protobuf
     var pb_reader: Io.Reader = .fixed(body);
     const otlp_request = metrics_otlp.ExportMetricsServiceRequest.decode(&pb_reader, arena) catch {
@@ -389,12 +389,16 @@ pub fn handleMetrics(
         return error.DecodeFailed;
     };
 
+    std.log.debug("otlp_request: {}", .{otlp_request});
+
     // 3. Transform to NDJSON
     const ndjson = transformMetricsToNdjson(arena, otlp_request) catch {
         log.err("metrics transform failed", .{});
         respondError(request, .internal_server_error, "Internal Server Error\n");
         return error.TransformFailed;
     };
+
+    std.log.debug("ndjson: {s}", .{ndjson});
 
     // 4. Ingest into Quickwit
     if (ndjson.len > 0) {
@@ -417,9 +421,21 @@ pub fn transformMetricsToNdjson(
     arena: Allocator,
     request: metrics_otlp.ExportMetricsServiceRequest,
 ) ![]const u8 {
-    // Map to correlate total + failed metrics into one EdgeDoc per edge.
-    // Key: "{timestamp}\0{client}\0{server}\0{conn_type}\0{client_op}\0{server_op}"
-    var edge_map = std.StringHashMap(EdgeDoc).init(arena);
+    // Accumulator for correlating total + failed metrics and collecting fingerprints.
+    // Key: "{timestamp}\0{client}\0{server}\0{conn_type}" — aggregates across operations
+    // so that call/error counts reflect ALL operations on the edge, not per-operation.
+    const EdgeAccum = struct {
+        timestamp_nanos: u64,
+        client: []const u8,
+        server: []const u8,
+        connection_type: []const u8,
+        calls: u64,
+        errors: u64,
+        client_fps: std.ArrayListUnmanaged([]const u8),
+        server_fps: std.ArrayListUnmanaged([]const u8),
+    };
+
+    var edge_map = std.StringHashMap(EdgeAccum).init(arena);
 
     for (request.resource_metrics.items) |rm| {
         for (rm.scope_metrics.items) |sm| {
@@ -459,8 +475,8 @@ pub fn transformMetricsToNdjson(
                         .as_double => |d| @intFromFloat(@max(d, 0)),
                     } else 0;
 
-                    // Build map key (includes operations for per-op granularity)
-                    const key = try std.fmt.allocPrint(arena, "{d}\x00{s}\x00{s}\x00{s}\x00{s}\x00{s}", .{ timestamp, client, server, connection_type, client_op, server_op });
+                    // Key WITHOUT operations — aggregate across all operation pairs
+                    const key = try std.fmt.allocPrint(arena, "{d}\x00{s}\x00{s}\x00{s}", .{ timestamp, client, server, connection_type });
 
                     const gop = try edge_map.getOrPut(key);
                     if (!gop.found_existing) {
@@ -471,15 +487,24 @@ pub fn transformMetricsToNdjson(
                             .connection_type = connection_type,
                             .calls = 0,
                             .errors = 0,
-                            .client_fingerprint = client_fp,
-                            .server_fingerprint = server_fp,
+                            .client_fps = .empty,
+                            .server_fps = .empty,
                         };
                     }
 
+                    // Sum across all operations on this edge
                     if (is_total) {
-                        gop.value_ptr.calls = val;
+                        gop.value_ptr.calls += val;
                     } else {
-                        gop.value_ptr.errors = val;
+                        gop.value_ptr.errors += val;
+                    }
+
+                    // Collect fingerprints (deduplicated)
+                    if (client_fp.len > 0) {
+                        try appendUnique(&gop.value_ptr.client_fps, arena, client_fp);
+                    }
+                    if (server_fp.len > 0) {
+                        try appendUnique(&gop.value_ptr.server_fps, arena, server_fp);
                     }
                 }
             }
@@ -489,8 +514,18 @@ pub fn transformMetricsToNdjson(
     // Serialize edge docs to NDJSON
     var ndjson: Io.Writer.Allocating = .init(arena);
     var it = edge_map.valueIterator();
-    while (it.next()) |doc| {
-        try std.json.Stringify.value(doc.*, .{}, &ndjson.writer);
+    while (it.next()) |accum| {
+        const doc = EdgeDoc{
+            .timestamp_nanos = accum.timestamp_nanos,
+            .client = accum.client,
+            .server = accum.server,
+            .connection_type = accum.connection_type,
+            .calls = accum.calls,
+            .errors = accum.errors,
+            .client_fingerprint = accum.client_fps.items,
+            .server_fingerprint = accum.server_fps.items,
+        };
+        try std.json.Stringify.value(doc, .{}, &ndjson.writer);
         try ndjson.writer.writeAll("\n");
     }
 
@@ -511,6 +546,13 @@ fn extractMetricAttr(attrs: []const common_pb.KeyValue, key: []const u8) ?[]cons
         }
     }
     return null;
+}
+
+fn appendUnique(list: *std.ArrayListUnmanaged([]const u8), alloc: Allocator, fp: []const u8) !void {
+    for (list.items) |existing| {
+        if (std.mem.eql(u8, existing, fp)) return;
+    }
+    try list.append(alloc, fp);
 }
 
 // -- Helpers --
@@ -859,9 +901,9 @@ test "transformMetricsToNdjson servicegraph metrics" {
     try std.testing.expectEqual(@as(i64, 42), obj.get("calls").?.integer);
     try std.testing.expectEqual(@as(i64, 3), obj.get("errors").?.integer);
     try std.testing.expectEqual(@as(i64, 1700000000000000000), obj.get("timestamp_nanos").?.integer);
-    // No operation attributes → empty fingerprints
-    try std.testing.expectEqualStrings("", obj.get("client_fingerprint").?.string);
-    try std.testing.expectEqualStrings("", obj.get("server_fingerprint").?.string);
+    // No operation attributes → empty fingerprint arrays
+    try std.testing.expectEqual(@as(usize, 0), obj.get("client_fingerprint").?.array.items.len);
+    try std.testing.expectEqual(@as(usize, 0), obj.get("server_fingerprint").?.array.items.len);
 }
 
 test "transformMetricsToNdjson ignores non-servicegraph metrics" {
@@ -925,13 +967,96 @@ test "transformMetricsToNdjson with operation dimensions" {
     const parsed = try std.json.parseFromSlice(std.json.Value, arena, ndjson[0 .. ndjson.len - 1], .{});
     const obj = parsed.value.object;
 
-    // Fingerprints should be 16-char hex strings
-    const client_fp = obj.get("client_fingerprint").?.string;
-    const server_fp = obj.get("server_fingerprint").?.string;
+    // Fingerprints should be arrays with one 16-char hex string each
+    const client_fp_arr = obj.get("client_fingerprint").?.array;
+    const server_fp_arr = obj.get("server_fingerprint").?.array;
+    try std.testing.expectEqual(@as(usize, 1), client_fp_arr.items.len);
+    try std.testing.expectEqual(@as(usize, 1), server_fp_arr.items.len);
+    const client_fp = client_fp_arr.items[0].string;
+    const server_fp = server_fp_arr.items[0].string;
     try std.testing.expectEqual(@as(usize, 16), client_fp.len);
     try std.testing.expectEqual(@as(usize, 16), server_fp.len);
     // Client (kind=3) and server (kind=2) fingerprints should differ
     try std.testing.expect(!std.mem.eql(u8, client_fp, server_fp));
+}
+
+test "transformMetricsToNdjson aggregates across operations" {
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    // Two request_total data points for same edge but different operations
+    var attrs_op_a: std.ArrayListUnmanaged(common_pb.KeyValue) = .empty;
+    try attrs_op_a.append(arena, .{ .key = "client", .value = .{ .value = .{ .string_value = "frontend" } } });
+    try attrs_op_a.append(arena, .{ .key = "server", .value = .{ .value = .{ .string_value = "backend" } } });
+    try attrs_op_a.append(arena, .{ .key = "connection_type", .value = .{ .value = .{ .string_value = "" } } });
+    try attrs_op_a.append(arena, .{ .key = "client_span.operation", .value = .{ .value = .{ .string_value = "GET /api/users" } } });
+    try attrs_op_a.append(arena, .{ .key = "server_span.operation", .value = .{ .value = .{ .string_value = "GET /api/users" } } });
+
+    var attrs_op_b: std.ArrayListUnmanaged(common_pb.KeyValue) = .empty;
+    try attrs_op_b.append(arena, .{ .key = "client", .value = .{ .value = .{ .string_value = "frontend" } } });
+    try attrs_op_b.append(arena, .{ .key = "server", .value = .{ .value = .{ .string_value = "backend" } } });
+    try attrs_op_b.append(arena, .{ .key = "connection_type", .value = .{ .value = .{ .string_value = "" } } });
+    try attrs_op_b.append(arena, .{ .key = "client_span.operation", .value = .{ .value = .{ .string_value = "POST /api/orders" } } });
+    try attrs_op_b.append(arena, .{ .key = "server_span.operation", .value = .{ .value = .{ .string_value = "POST /api/orders" } } });
+
+    var total_dps: std.ArrayListUnmanaged(metrics_pb.NumberDataPoint) = .empty;
+    try total_dps.append(arena, .{
+        .attributes = attrs_op_a,
+        .time_unix_nano = 1700000000000000000,
+        .value = .{ .as_int = 10 },
+    });
+    try total_dps.append(arena, .{
+        .attributes = attrs_op_b,
+        .time_unix_nano = 1700000000000000000,
+        .value = .{ .as_int = 5 },
+    });
+
+    var metrics_list: std.ArrayListUnmanaged(metrics_pb.Metric) = .empty;
+    try metrics_list.append(arena, .{
+        .name = "traces_service_graph_request_total",
+        .data = .{ .sum = .{ .data_points = total_dps } },
+    });
+
+    var scope_metrics: std.ArrayListUnmanaged(metrics_pb.ScopeMetrics) = .empty;
+    try scope_metrics.append(arena, .{ .metrics = metrics_list });
+
+    var resource_metrics: std.ArrayListUnmanaged(metrics_pb.ResourceMetrics) = .empty;
+    try resource_metrics.append(arena, .{ .scope_metrics = scope_metrics });
+
+    const request = metrics_otlp.ExportMetricsServiceRequest{ .resource_metrics = resource_metrics };
+    const ndjson = try transformMetricsToNdjson(arena, request);
+
+    // Should produce exactly ONE doc (not two) — operations are aggregated
+    try std.testing.expect(ndjson.len > 0);
+    var line_count: usize = 0;
+    for (ndjson) |c| {
+        if (c == '\n') line_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), line_count);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, arena, ndjson[0 .. ndjson.len - 1], .{});
+    const obj = parsed.value.object;
+
+    // Calls should be summed: 10 + 5 = 15
+    try std.testing.expectEqual(@as(i64, 15), obj.get("calls").?.integer);
+
+    // Should have 2 client fingerprints and 2 server fingerprints (one per operation)
+    const client_fps = obj.get("client_fingerprint").?.array;
+    const server_fps = obj.get("server_fingerprint").?.array;
+    try std.testing.expectEqual(@as(usize, 2), client_fps.items.len);
+    try std.testing.expectEqual(@as(usize, 2), server_fps.items.len);
+
+    // Each fingerprint should be 16 chars
+    for (client_fps.items) |fp| {
+        try std.testing.expectEqual(@as(usize, 16), fp.string.len);
+    }
+    for (server_fps.items) |fp| {
+        try std.testing.expectEqual(@as(usize, 16), fp.string.len);
+    }
+
+    // The two client fingerprints should be different (different operations)
+    try std.testing.expect(!std.mem.eql(u8, client_fps.items[0].string, client_fps.items[1].string));
 }
 
 test "extractMetricAttr" {

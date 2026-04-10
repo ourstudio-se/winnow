@@ -10,6 +10,7 @@ interface OperationsDrilldownProps {
   errorsOnly: boolean;
   isImplicit: boolean;
   sourceService?: string;
+  clientFingerprints?: string[];
   serverFingerprints?: string[];
   onClose: () => void;
   onToggleErrorsOnly: (errorsOnly: boolean) => void;
@@ -78,6 +79,7 @@ export function OperationsDrilldownPanel({
   errorsOnly,
   isImplicit,
   sourceService,
+  clientFingerprints,
   serverFingerprints,
   onClose,
   onToggleErrorsOnly,
@@ -91,18 +93,33 @@ export function OperationsDrilldownPanel({
     setLoading(true);
     setError(null);
     try {
-      // Implicit targets (databases, caches): query CLIENT spans via peer.service/db.system
-      // Real services: query SERVER spans on the target
-      // When we have server fingerprints from the edge, use them to scope to only
-      // operations that flow through this specific edge (not all SERVER ops on target)
-      const hasFpFilter = !isImplicit && sourceService && serverFingerprints && serverFingerprints.length > 0;
-      const serviceBase = isImplicit
-        ? sourceService
-          ? `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
-          : `(span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`
-        : hasFpFilter
-          ? `service_name:"${serviceName}" AND (span_kind:2 OR span_kind:5) AND span_fingerprint:(${serverFingerprints.map((fp) => `"${fp}"`).join(" OR ")})`
-          : `service_name:"${serviceName}" AND (span_kind:2 OR span_kind:5)`;
+      // Edge clicks: show CLIENT/PRODUCER spans on the source (caller's perspective)
+      // Node clicks (no sourceService): show SERVER/CONSUMER spans on the target
+      // Implicit targets: CLIENT spans via peer.service/db.system (with fingerprints if available)
+      const hasClientFp = sourceService && clientFingerprints && clientFingerprints.length > 0;
+      const hasServerFp = sourceService && serverFingerprints && serverFingerprints.length > 0;
+      let serviceBase: string;
+      if (sourceService && hasClientFp) {
+        // Edge click with client fingerprints: CLIENT/PRODUCER spans on the source
+        // Works for both real and implicit targets — fingerprints precisely identify the operations
+        serviceBase = `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND span_fingerprint:(${clientFingerprints!.map((fp) => `"${fp}"`).join(" OR ")})`;
+      } else if (sourceService && isImplicit) {
+        // Edge → implicit target without fingerprints: fall back to peer.service/db.system
+        const peerFilter = `(span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`;
+        serviceBase = `service_name:"${sourceService}" AND (span_kind:3 OR span_kind:4) AND ${peerFilter}`;
+      } else if (sourceService && hasServerFp) {
+        // Edge → real target without client fingerprints: fall back to server fingerprints
+        serviceBase = `service_name:"${serviceName}" AND (span_kind:2 OR span_kind:5) AND span_fingerprint:(${serverFingerprints!.map((fp) => `"${fp}"`).join(" OR ")})`;
+      } else if (sourceService) {
+        // Edge without any fingerprints: all SERVER/CONSUMER on target
+        serviceBase = `service_name:"${serviceName}" AND (span_kind:2 OR span_kind:5)`;
+      } else if (isImplicit) {
+        // Node click on implicit target (no source): CLIENT spans from any caller
+        serviceBase = `(span_kind:3 OR span_kind:4) AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}")`;
+      } else {
+        // Node click on real target: SERVER/CONSUMER spans
+        serviceBase = `service_name:"${serviceName}" AND (span_kind:2 OR span_kind:5)`;
+      }
       const base = `(${activeQuery}) AND ${serviceBase}`;
       const errorQuery = `${base} AND span_status.code:2`;
       const okQuery = `${base} AND NOT span_status.code:2`;
@@ -194,7 +211,7 @@ export function OperationsDrilldownPanel({
     } finally {
       setLoading(false);
     }
-  }, [serviceName, activeQuery, errorsOnly, isImplicit, sourceService, serverFingerprints]);
+  }, [serviceName, activeQuery, errorsOnly, isImplicit, sourceService, clientFingerprints, serverFingerprints]);
 
   useEffect(() => {
     fetchOperations();
@@ -256,26 +273,9 @@ export function OperationsDrilldownPanel({
               op={op}
               onClick={() => {
                 const params = new URLSearchParams();
-                const fp = op.fingerprint;
-                if (isImplicit) {
-                  let q = sourceService
-                    ? `service_name:"${sourceService}" AND (span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:"${fp}"`
-                    : `(span_attributes.peer.service:"${serviceName}" OR span_attributes.db.system:"${serviceName}") AND span_fingerprint:"${fp}"`;
-                  if (op.status === "error") q += " AND span_status.code:2";
-                  params.append("q", q);
-                } else if (sourceService) {
-                  // Edge → real service: filter by source + fingerprint
-                  params.append("f", `service_name:${sourceService}`);
-                  params.append("f", `span_fingerprint:${fp}`);
-                  if (op.status === "error") {
-                    params.append("f", "span_status.code:2");
-                  }
-                } else {
-                  params.append("f", `service_name:${serviceName}`);
-                  params.append("f", `span_fingerprint:${fp}`);
-                  if (op.status === "error") {
-                    params.append("f", "span_status.code:2");
-                  }
+                params.append("f", `span_fingerprint:${op.fingerprint}`);
+                if (op.status === "error") {
+                  params.append("f", "span_status.code:2");
                 }
                 navigate(`/traces?${params.toString()}`);
               }}

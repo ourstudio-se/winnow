@@ -16,8 +16,8 @@ pub const field_mappings = [_]index_schema.FieldMapping{
     .{ .name = "connection_type", .type = "text", .tokenizer = "raw", .fast = true },
     .{ .name = "calls", .type = "u64", .fast = true },
     .{ .name = "errors", .type = "u64", .fast = true },
-    .{ .name = "client_fingerprint", .type = "text", .tokenizer = "raw", .fast = true },
-    .{ .name = "server_fingerprint", .type = "text", .tokenizer = "raw", .fast = true },
+    .{ .name = "client_fingerprint", .type = "array<text>", .tokenizer = "raw", .fast = true },
+    .{ .name = "server_fingerprint", .type = "array<text>", .tokenizer = "raw", .fast = true },
 };
 
 const std = @import("std");
@@ -28,14 +28,14 @@ test "edges schema field count" {
 
 test "edges schema buildIndexConfig" {
     const allocator = std.testing.allocator;
-    const json = try index_schema.buildIndexConfig(allocator, "winnow-edges-v0_2", schema, null);
+    const json = try index_schema.buildIndexConfig(allocator, "winnow-edges-v0_3", schema, null);
     defer allocator.free(json);
 
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
     defer parsed.deinit();
 
     const root = parsed.value.object;
-    try std.testing.expectEqualStrings("winnow-edges-v0_2", root.get("index_id").?.string);
+    try std.testing.expectEqualStrings("winnow-edges-v0_3", root.get("index_id").?.string);
 
     const doc_mapping = root.get("doc_mapping").?.object;
     const mappings = doc_mapping.get("field_mappings").?.array;
