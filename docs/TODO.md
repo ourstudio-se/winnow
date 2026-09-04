@@ -308,3 +308,5 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Keyboard navigation in the "Add filter" dropdown: ArrowDown from the search input steps into the results, up/down move through them, up from the first item returns to the input, Enter selects the highlighted item. Implemented as highlight-index combobox pattern (focus stays in the input) for both the field-picker and value-picker steps; highlighted item scrolls into view.
 - [ ] Verify: Refresh button re-fetches in traces/logs/service-map; Ctrl+Enter works in chip mode and doesn't double-fire in raw mode
 - [ ] Verify: arrow-key navigation in Add filter dropdown (field and value steps)
+- [x] Raw-query autocomplete dropdown was clipped at the filter bar's bottom edge: `overflow-x-auto` on the bar forces overflow-y to auto, clipping the absolutely-positioned dropdown. Now the bar only clips in chip mode (where chips need horizontal scroll); raw mode leaves overflow visible.
+- [ ] Verify: autocomplete dropdown overlays the histogram/table in raw query mode

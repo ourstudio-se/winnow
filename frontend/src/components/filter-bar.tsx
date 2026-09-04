@@ -524,7 +524,9 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
   }, [suggestedValues, valueInput]);
 
   return (
-    <div className="flex h-14 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-card px-3">
+    // overflow-x-auto lets long chip rows scroll, but any overflow clipping
+    // would also cut off the raw-mode autocomplete dropdown — so only clip in chip mode.
+    <div className={`flex h-14 shrink-0 items-center gap-2 border-b border-border bg-card px-3 ${isRawMode ? "" : "overflow-x-auto"}`}>
       {/* Time picker */}
       <Popover open={timePickerOpen} onOpenChange={handleTimePickerOpen}>
         <PopoverTrigger asChild>
