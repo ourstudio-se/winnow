@@ -299,13 +299,27 @@ export function LogsView() {
         </div>
       ) : error ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3">
-          <p className="text-destructive">{error}</p>
-          <button
-            onClick={() => fetchData()}
-            className="rounded-md bg-secondary px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary/80"
-          >
-            Retry
-          </button>
+          <p className="max-w-2xl overflow-hidden text-ellipsis text-destructive">{error}</p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => fetchData()}
+              className="rounded-md bg-secondary px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary/80"
+            >
+              Retry
+            </button>
+            {sortField && (
+              <button
+                onClick={() => {
+                  setSortField(null);
+                  setSortDir("desc");
+                  saveLogSort(null);
+                }}
+                className="rounded-md bg-secondary px-3 py-1.5 text-sm text-secondary-foreground hover:bg-secondary/80"
+              >
+                Reset sort
+              </button>
+            )}
+          </div>
         </div>
       ) : logs.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 text-muted-foreground">
