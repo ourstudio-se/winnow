@@ -290,10 +290,10 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Verify: `zig build test` passes
 - [x] Verify: `npx tsc --noEmit` passes
 - [x] Verify: `pnpm build` succeeds
-- [ ] Verify: delete existing `winnow-edges-v0_3` index, restart backend — new 8-field index created
-- [ ] Verify: edge docs have non-empty fingerprints after servicegraph connector sends metrics with `dimensions: ["span.operation"]`
-- [ ] Verify: clicking a real→real edge shows only operations flowing through that edge (not all SERVER ops)
-- [ ] Verify: edge labels show correct call counts on real→real edges (matching drilldown panel)
+- [x] Verify: delete existing `winnow-edges-v0_3` index, restart backend — new 8-field index created
+- [x] Verify: edge docs have non-empty fingerprints after servicegraph connector sends metrics with `dimensions: ["span.operation"]`
+- [x] Verify: clicking a real→real edge shows only operations flowing through that edge (not all SERVER ops)
+- [x] Verify: edge labels show correct call counts on real→real edges (matching drilldown panel)
 
 ## Bug Fixes
 
@@ -306,7 +306,7 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 
 - [x] Refresh button in all views (FilterBar) when the query editor is not visible — rendered right-aligned where "Run" sits in raw mode, muted outline style, hotkeyed Ctrl/Cmd+Enter. Re-runs the current query; relative time windows advance to now. In raw mode Ctrl+Enter still runs the query (handled by RawQueryInput).
 - [x] Keyboard navigation in the "Add filter" dropdown: ArrowDown from the search input steps into the results, up/down move through them, up from the first item returns to the input, Enter selects the highlighted item. Implemented as highlight-index combobox pattern (focus stays in the input) for both the field-picker and value-picker steps; highlighted item scrolls into view.
-- [ ] Verify: Refresh button re-fetches in traces/logs/service-map; Ctrl+Enter works in chip mode and doesn't double-fire in raw mode
-- [ ] Verify: arrow-key navigation in Add filter dropdown (field and value steps)
+- [x] Verify: Refresh button re-fetches in traces/logs/service-map; Ctrl+Enter works in chip mode and doesn't double-fire in raw mode
+- [x] Verify: arrow-key navigation in Add filter dropdown (field and value steps)
 - [x] Raw-query autocomplete dropdown was clipped at the filter bar's bottom edge: `overflow-x-auto` on the bar forces overflow-y to auto, clipping the absolutely-positioned dropdown. Now the bar only clips in chip mode (where chips need horizontal scroll); raw mode leaves overflow visible.
-- [ ] Verify: autocomplete dropdown overlays the histogram/table in raw query mode
+- [x] Verify: autocomplete dropdown overlays the histogram/table in raw query mode
