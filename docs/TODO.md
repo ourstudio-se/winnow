@@ -305,4 +305,6 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 ## Ergonomics
 
 - [x] Refresh button in all views (FilterBar) when the query editor is not visible — rendered right-aligned where "Run" sits in raw mode, muted outline style, hotkeyed Ctrl/Cmd+Enter. Re-runs the current query; relative time windows advance to now. In raw mode Ctrl+Enter still runs the query (handled by RawQueryInput).
+- [x] Keyboard navigation in the "Add filter" dropdown: ArrowDown from the search input steps into the results, up/down move through them, up from the first item returns to the input, Enter selects the highlighted item. Implemented as highlight-index combobox pattern (focus stays in the input) for both the field-picker and value-picker steps; highlighted item scrolls into view.
 - [ ] Verify: Refresh button re-fetches in traces/logs/service-map; Ctrl+Enter works in chip mode and doesn't double-fire in raw mode
+- [ ] Verify: arrow-key navigation in Add filter dropdown (field and value steps)

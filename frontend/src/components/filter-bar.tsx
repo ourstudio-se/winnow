@@ -109,8 +109,8 @@ async function fetchFieldValues(index: "traces" | "logs", field: string, baseQue
       values: { terms: { field: formatFieldPath(field), size: 50 } },
     },
   });
-  const buckets = (res.aggregations?.values as any)?.buckets ?? [];
-  return buckets.map((b: any) => String(b.key));
+  const agg = res.aggregations?.values as { buckets?: { key: unknown }[] } | undefined;
+  return (agg?.buckets ?? []).map((b) => String(b.key));
 }
 
 function collectKeys(obj: unknown, prefix: string, out: Set<string>) {
@@ -240,6 +240,9 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
   const [suggestedValues, setSuggestedValues] = useState<string[]>([]);
   const [valuesLoading, setValuesLoading] = useState(false);
   const valueInputRef = useRef<HTMLInputElement>(null);
+  // Keyboard highlight in the field/value result lists; -1 = none (input "focused")
+  const [fieldHighlightIdx, setFieldHighlightIdx] = useState(-1);
+  const [valueHighlightIdx, setValueHighlightIdx] = useState(-1);
 
   // Raw query mode — driven by URL `q` param
   const rawQuery = searchParams.get("q");
@@ -440,6 +443,29 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     setValueInput("");
     setSuggestedValues([]);
     setValuesLoading(false);
+    setFieldHighlightIdx(-1);
+    setValueHighlightIdx(-1);
+  }
+
+  /** Arrow-key navigation over a result list: down steps into/through the list,
+   *  up steps back and ultimately returns to the input (-1 = no highlight). */
+  function handleListNavigation(
+    e: React.KeyboardEvent<HTMLInputElement>,
+    highlightIdx: number,
+    setHighlightIdx: (i: number) => void,
+    length: number,
+    onPick: (idx: number) => void,
+  ) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (length > 0) setHighlightIdx(Math.min(highlightIdx + 1, length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIdx(Math.max(highlightIdx - 1, -1));
+    } else if (e.key === "Enter" && highlightIdx >= 0 && highlightIdx < length) {
+      e.preventDefault();
+      onPick(highlightIdx);
+    }
   }
 
   // Combine baseQuery with active filters so autocomplete narrows progressively
@@ -463,6 +489,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
     setPopoverStep("value");
     setValueInput("");
     setSuggestedValues([]);
+    setValueHighlightIdx(-1);
     // Focus the value input after render
     requestAnimationFrame(() => valueInputRef.current?.focus());
     // Fetch actual values via terms aggregation (skip for bool fields)
@@ -484,7 +511,7 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
   // Filtered field list — hide fields that already have active filters
   const filteredFields = useMemo(() => {
     const activeFieldSet = new Set(activeFilters.map((f) => f.field));
-    let fields = discoveredFields.filter((f) => !activeFieldSet.has(f.field));
+    const fields = discoveredFields.filter((f) => !activeFieldSet.has(f.field));
     if (!fieldSearch) return fields;
     const lower = fieldSearch.toLowerCase();
     return fields.filter((f) => f.field.toLowerCase().includes(lower));
@@ -623,7 +650,15 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
                       type="text"
                       placeholder="Search fields..."
                       value={fieldSearch}
-                      onChange={(e) => setFieldSearch(e.target.value)}
+                      onChange={(e) => {
+                        setFieldSearch(e.target.value);
+                        setFieldHighlightIdx(-1);
+                      }}
+                      onKeyDown={(e) =>
+                        handleListNavigation(e, fieldHighlightIdx, setFieldHighlightIdx, filteredFields.length, (i) =>
+                          handleFieldSelect(filteredFields[i]),
+                        )
+                      }
                       className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                       autoFocus
                     />
@@ -634,11 +669,14 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
                         No fields found
                       </div>
                     ) : (
-                      filteredFields.map((f) => (
+                      filteredFields.map((f, i) => (
                         <button
                           key={f.field}
+                          ref={i === fieldHighlightIdx ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
                           onClick={() => handleFieldSelect(f)}
-                          className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-muted"
+                          className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-muted ${
+                            i === fieldHighlightIdx ? "bg-muted" : ""
+                          }`}
                         >
                           <span className="truncate">{f.field}</span>
                           <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">
@@ -697,7 +735,16 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
                       type="text"
                       placeholder="Type to filter..."
                       value={valueInput}
-                      onChange={(e) => setValueInput(e.target.value)}
+                      onChange={(e) => {
+                        setValueInput(e.target.value);
+                        setValueHighlightIdx(-1);
+                      }}
+                      onKeyDown={(e) =>
+                        handleListNavigation(e, valueHighlightIdx, setValueHighlightIdx, filteredValues.length, (i) => {
+                          if (selectedField) addFilter(selectedField, filteredValues[i]);
+                          setPopoverOpen(false);
+                        })
+                      }
                       className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                     />
                     {valuesLoading && (
@@ -710,14 +757,17 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
                         Loading values...
                       </div>
                     ) : filteredValues.length > 0 ? (
-                      filteredValues.map((v) => (
+                      filteredValues.map((v, i) => (
                         <button
                           key={v}
+                          ref={i === valueHighlightIdx ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
                           onClick={() => {
                             if (selectedField) addFilter(selectedField, v);
                             setPopoverOpen(false);
                           }}
-                          className="flex w-full items-center px-3 py-1.5 text-left text-xs hover:bg-muted"
+                          className={`flex w-full items-center px-3 py-1.5 text-left text-xs hover:bg-muted ${
+                            i === valueHighlightIdx ? "bg-muted" : ""
+                          }`}
                         >
                           <span className="truncate">{v}</span>
                         </button>
