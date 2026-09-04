@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { X, Plus, Search, Loader2, Calendar, ChevronDown, Code, Play } from "lucide-react";
+import { X, Plus, Search, Loader2, Calendar, ChevronDown, Code, Play, RotateCw } from "lucide-react";
 import { RawQueryInput } from "@/components/raw-query-input";
 import {
   getTracesMetadata,
@@ -334,6 +334,26 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
       onFilterChange(buildFilterState(activeFilters, timeSelection, rawQuery));
     }
   }, [activeFilters, timeSelection, buildFilterState, onFilterChange, searchParams, rawQuery]);
+
+  // Re-run the current query as-is. For relative time selections this also
+  // advances the window to now, since buildFilterState recomputes it.
+  const refresh = useCallback(() => {
+    onFilterChange(buildFilterState(activeFilters, timeSelection, rawQuery));
+  }, [onFilterChange, buildFilterState, activeFilters, timeSelection, rawQuery]);
+
+  // Ctrl/Cmd+Enter refreshes when the query editor is not visible.
+  // (In raw mode, RawQueryInput handles Ctrl+Enter itself as "Run".)
+  useEffect(() => {
+    if (isRawMode) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        refresh();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isRawMode, refresh]);
 
   function addFilter(field: DiscoveredField, value: string) {
     const trimmed = value.trim();
@@ -738,6 +758,18 @@ export function FilterBar({ index, onFilterChange, baseQuery = "*", resolvedLabe
 
       {/* Trailing content + raw mode toggle */}
       <div className="ml-auto flex items-center gap-2">
+        {!isRawMode && (
+          <Button
+            variant="outline"
+            size="xs"
+            className="gap-1 text-muted-foreground hover:text-foreground"
+            onClick={refresh}
+            title="Refresh (Ctrl+Enter)"
+          >
+            <RotateCw className="h-3 w-3" />
+            Refresh
+          </Button>
+        )}
         {trailing}
         <Button
           variant="ghost"

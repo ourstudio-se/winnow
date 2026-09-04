@@ -301,3 +301,8 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Sorting logs by Trace column bricked the view until localStorage was cleared: Quickwit rejects sorts on text fields (`trace_id`, also `service_name`) with 400; backend masked it as 502, which Cloudflare replaces with its branded HTML error page; the bad sort persisted in localStorage and the error state hid the table headers. Fixed: Service/Trace columns no longer sortable (`PSEUDO_SORT_FIELDS`), persisted sort validated against sortable fields on load, "Reset sort" button added to logs error state, and backend now forwards Quickwit 4xx statuses as-is instead of 502 (`forwardStatus` in `api.zig`).
 - [ ] Verify: logs view shows newest entries first against a live Quickwit
 - [ ] Verify: logs view with a stale `winnow-log-sort` = `trace_id` in localStorage loads normally (sort discarded)
+
+## Ergonomics
+
+- [x] Refresh button in all views (FilterBar) when the query editor is not visible — rendered right-aligned where "Run" sits in raw mode, muted outline style, hotkeyed Ctrl/Cmd+Enter. Re-runs the current query; relative time windows advance to now. In raw mode Ctrl+Enter still runs the query (handled by RawQueryInput).
+- [ ] Verify: Refresh button re-fetches in traces/logs/service-map; Ctrl+Enter works in chip mode and doesn't double-fire in raw mode
