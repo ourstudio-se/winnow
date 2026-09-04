@@ -82,7 +82,7 @@ fn handleIndexMetadata(
 
     log.warn("Quickwit returned {d} for index metadata {s}", .{ @intFromEnum(result.status), index_id });
     try request.respond(result.body, .{
-        .status = .bad_gateway,
+        .status = forwardStatus(result.status),
         .extra_headers = &.{
             .{ .name = "content-type", .value = "application/json" },
         },
@@ -112,14 +112,22 @@ fn handleSearch(
         return respondJson(request, result.body);
     }
 
-    // Non-200 from Quickwit — forward body with 502
+    // Non-200 from Quickwit — forward 4xx as-is (client error, e.g. invalid
+    // sort field), map everything else to 502. Proxies like Cloudflare replace
+    // 502 bodies with their own error page, so 4xx must not be masked as 502.
     log.warn("Quickwit returned {d} for {s}", .{ @intFromEnum(result.status), index_id });
     try request.respond(result.body, .{
-        .status = .bad_gateway,
+        .status = forwardStatus(result.status),
         .extra_headers = &.{
             .{ .name = "content-type", .value = "application/json" },
         },
     });
+}
+
+/// Status to use when relaying a Quickwit error response: 4xx pass through, anything else becomes 502.
+fn forwardStatus(status: http.Status) http.Status {
+    const code = @intFromEnum(status);
+    return if (code >= 400 and code < 500) status else .bad_gateway;
 }
 
 fn handleServiceGraph(

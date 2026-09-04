@@ -29,13 +29,17 @@ export function severityColor(severity: string): string {
 
 export type SortDirection = "asc" | "desc";
 
-/** Map pseudo-column IDs to the Quickwit field used for sorting. undefined = not sortable. */
+/**
+ * Map pseudo-column IDs to the Quickwit field used for sorting. undefined = not sortable.
+ * Quickwit rejects sorts on text fields ("sort by field on type text is currently
+ * not supported"), so only datetime/numeric fast fields are sortable.
+ */
 export const PSEUDO_SORT_FIELDS: Record<string, string | undefined> = {
   _timestamp: "timestamp_nanos",
   _severity: "severity_number",
-  _service: "service_name",
+  _service: undefined,
   _message: undefined,
-  _trace: "trace_id",
+  _trace: undefined,
 };
 
 const SORT_STORAGE_KEY = "winnow-log-sort";
@@ -45,7 +49,14 @@ export function loadLogSort(): { field: string; dir: SortDirection } | null {
     const stored = localStorage.getItem(SORT_STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      if (parsed && typeof parsed.field === "string" && (parsed.dir === "asc" || parsed.dir === "desc"))
+      if (
+        parsed &&
+        typeof parsed.field === "string" &&
+        (parsed.dir === "asc" || parsed.dir === "desc") &&
+        // Discard persisted sorts on fields that are no longer sortable
+        // (e.g. text fields, which Quickwit rejects at query time).
+        Object.values(PSEUDO_SORT_FIELDS).includes(parsed.field)
+      )
         return parsed;
     }
   } catch { /* ignore */ }
