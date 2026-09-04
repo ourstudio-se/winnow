@@ -294,3 +294,8 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [ ] Verify: edge docs have non-empty fingerprints after servicegraph connector sends metrics with `dimensions: ["span.operation"]`
 - [ ] Verify: clicking a real→real edge shows only operations flowing through that edge (not all SERVER ops)
 - [ ] Verify: edge labels show correct call counts on real→real edges (matching drilldown panel)
+
+## Bug Fixes
+
+- [x] Logs default sort was ascending timestamp instead of descending: Quickwit's `sort_by` prefix semantics are inverted vs Elasticsearch (bare field = desc, `-` prefix = asc), but the frontend sent ES-style `-field` for desc everywhere. Fixed by translating ES-style → Quickwit in `searchIndex` (`frontend/src/lib/api.ts`); app code keeps ES-style convention. Affected logs, traces, and trace-detail sorts.
+- [ ] Verify: logs view shows newest entries first against a live Quickwit

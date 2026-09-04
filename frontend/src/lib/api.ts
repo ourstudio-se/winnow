@@ -40,14 +40,32 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * Translate ES-style sort syntax ("-field" = descending, "field" = ascending)
+ * to Quickwit's, which is inverted: a bare field sorts descending and a "-"
+ * prefix means ascending. App code uses ES-style throughout.
+ */
+function toQuickwitSortBy(sortBy: string): string {
+  return sortBy
+    .split(",")
+    .map((part) => {
+      const field = part.trim();
+      return field.startsWith("-") ? field.slice(1) : `-${field}`;
+    })
+    .join(",");
+}
+
 async function searchIndex<T>(
   category: "traces" | "logs",
   request: SearchRequest,
 ): Promise<SearchResponse<T>> {
+  const body: SearchRequest = request.sort_by
+    ? { ...request, sort_by: toQuickwitSortBy(request.sort_by) }
+    : request;
   const res = await fetch(`/api/v1/${category}/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new ApiError(res.status, await res.text());
