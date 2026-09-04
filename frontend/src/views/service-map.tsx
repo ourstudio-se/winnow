@@ -36,16 +36,16 @@ import {
   type AggregatedEdge,
   type EdgesAggResponse,
   type ServiceAggResponse,
+  type ConnectorAggResponse,
   type ServiceKind,
   type ServiceStats,
   type ServiceEdgeData,
-  type SampledSpan,
   type ForceNode,
   formatDuration,
   errorCountFromStatus,
   parseEdgesFromAggs,
-  deriveEdgesFromTraces,
-  mergeEdges,
+  parseConnectorEdges,
+  mergeEdgesV2,
   computeServiceStats,
   computeDepths,
   computeForceLayout,
@@ -119,6 +119,8 @@ function buildGraph(
       errorCount: e.errorCount,
       avgDurationMs: e.avgDurationMs,
       edgeType: e.edgeType,
+      clientFingerprints: e.clientFingerprints,
+      serverFingerprints: e.serverFingerprints,
     },
   }));
 
@@ -328,13 +330,14 @@ export function ServiceMapView() {
     hasErrors: boolean;
     hasCalls: boolean;
     isImplicit: boolean;
-    serviceKind: ServiceKind;
   } | null>(null);
   const [drilldown, setDrilldown] = useState<{
     serviceName: string;
     errorsOnly: boolean;
     isImplicit: boolean;
     sourceService?: string;
+    clientFingerprints?: string[];
+    serverFingerprints?: string[];
   } | null>(null);
 
   const filterBarStateRef = useRef<FilterState | undefined>(undefined);
@@ -345,10 +348,8 @@ export function ServiceMapView() {
     svcTotals: Map<string, { count: number; avgDurationMs: number }>;
     svcErrors: Map<string, number>;
     realServiceNames: Set<string>;
+    activeQuery: string;
   } | null>(null);
-
-  // Store sampled spans for edge operations drilldown (same data as edge counts)
-  const sampledSpansRef = useRef<SampledSpan[]>([]);
 
   // Simulation refs
   const simRef = useRef<Simulation<ForceNode, SimulationLinkDatum<ForceNode>> | null>(null);
@@ -519,7 +520,6 @@ export function ServiceMapView() {
         hasErrors: node.data.totalErrors > 0,
         hasCalls: node.data.totalCalls > 0,
         isImplicit: node.data.isImplicit,
-        serviceKind: node.data.serviceKind,
       });
     },
     [],
@@ -545,6 +545,8 @@ export function ServiceMapView() {
         errorsOnly: false,
         isImplicit,
         sourceService: edge.source,
+        clientFingerprints: edge.data?.clientFingerprints,
+        serverFingerprints: edge.data?.serverFingerprints,
       });
     },
     [nodes],
@@ -568,20 +570,25 @@ export function ServiceMapView() {
         // Single backend call handles all 3 Quickwit queries
         const resp = await fetchServiceGraph(query);
 
-        // Parse sampled spans from span fetch
-        const sampledSpans = (resp.spans.hits as unknown as SampledSpan[]) ?? [];
-        sampledSpansRef.current = sampledSpans;
-
-        // Derive edges from parent-child relationships
-        const pcEdges = deriveEdgesFromTraces(sampledSpans);
-        const realServiceNames = new Set(sampledSpans.map((s) => s.service_name));
+        // Parse connector edges from servicegraph connector metrics
+        const connectorAgg = resp.connector.aggregations as unknown as ConnectorAggResponse | undefined;
+        const connectorEdges = connectorAgg?.by_client ? parseConnectorEdges(connectorAgg) : [];
 
         // Parse peer.service edges from edge aggregations (single response with by_status)
         const edgeAgg = resp.edges.aggregations as unknown as EdgesAggResponse;
         const peerEdges = parseEdgesFromAggs(edgeAgg);
 
-        // Merge: parent-child takes priority, peer.service only for implicit leaves
-        const aggregated = mergeEdges(pcEdges, peerEdges, realServiceNames);
+        // Real service names = services with SERVER/CONSUMER spans (from svc agg)
+        const svcAggForNames = resp.svc.aggregations as unknown as ServiceAggResponse;
+        const realServiceNames = new Set(svcAggForNames.services.buckets.map((b) => b.key));
+
+        // Connector edges are pre-aggregated (no trace_id, service_name, etc.)
+        // so they're only meaningful when the query is purely time-based.
+        // With non-time filters, fall back to peer.service edges from the traces index.
+        const isTimeOnly = query === "*" || /^span_start_timestamp_nanos:\[[^\]]+\]$/.test(query.trim());
+        const aggregated = connectorEdges.length > 0 && isTimeOnly
+          ? mergeEdgesV2(connectorEdges, peerEdges, realServiceNames)
+          : peerEdges;
 
         // Per-service stats from svc aggregations (single response with by_status)
         const svcAgg = resp.svc.aggregations as unknown as ServiceAggResponse;
@@ -594,7 +601,7 @@ export function ServiceMapView() {
         }
 
         // Store raw data for re-layout on mode toggle
-        graphDataRef.current = { aggregated, svcTotals, svcErrors, realServiceNames };
+        graphDataRef.current = { aggregated, svcTotals, svcErrors, realServiceNames, activeQuery: query };
 
         const graph = buildGraph(aggregated, svcTotals, svcErrors, realServiceNames, layoutMode);
         setNodes(graph.nodes);
@@ -719,10 +726,12 @@ export function ServiceMapView() {
           {drilldown && (
             <OperationsDrilldownPanel
               serviceName={drilldown.serviceName}
+              activeQuery={graphDataRef.current?.activeQuery ?? "*"}
               errorsOnly={drilldown.errorsOnly}
               isImplicit={drilldown.isImplicit}
               sourceService={drilldown.sourceService}
-              sampledSpans={sampledSpansRef.current}
+              clientFingerprints={drilldown.clientFingerprints}
+              serverFingerprints={drilldown.serverFingerprints}
               onClose={() => setDrilldown(null)}
               onToggleErrorsOnly={(errorsOnly) =>
                 setDrilldown((prev) => (prev ? { ...prev, errorsOnly } : null))
@@ -739,7 +748,6 @@ export function ServiceMapView() {
           hasErrors={contextMenu.hasErrors}
           hasCalls={contextMenu.hasCalls}
           isImplicit={contextMenu.isImplicit}
-          serviceKind={contextMenu.serviceKind}
           onClose={() => setContextMenu(null)}
           onDrilldown={(errorsOnly) =>
             setDrilldown({

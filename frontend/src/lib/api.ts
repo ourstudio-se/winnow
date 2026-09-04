@@ -88,7 +88,7 @@ export async function getLogsMetadata(): Promise<IndexMetadataResponse> {
 export interface ServiceGraphResponse {
   svc: SearchResponse<never>;
   edges: SearchResponse<never>;
-  spans: SearchResponse<Record<string, unknown>>;
+  connector: SearchResponse<never>;
 }
 
 export async function fetchServiceGraph(

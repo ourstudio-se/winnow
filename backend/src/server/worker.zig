@@ -60,11 +60,12 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, conn: std.net.Ser
         return;
     };
 
-    std.log.debug("request received - {s}, ctx: {}", .{ request.head.target, worker.server.opts.roles });
+    // std.log.debug("request received - {s}, ctx: {}", .{ request.head.target, worker.server.opts.roles });
 
     const pathType = enum {
         @"/v1/traces",
         @"/v1/logs",
+        @"/v1/metrics",
         @"*",
     };
 
@@ -93,6 +94,21 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, conn: std.net.Ser
             if (request.head.method == .POST) {
                 ingest.handleLogs(&request, arena, qw, worker.server.opts.indices.logs) catch |err| {
                     std.log.err("log ingest error: {}", .{err});
+                };
+            } else {
+                request.respond("Method Not Allowed\n", .{
+                    .status = .method_not_allowed,
+                    .extra_headers = &.{
+                        .{ .name = "content-type", .value = "text/plain" },
+                    },
+                }) catch {};
+            }
+        },
+        .@"/v1/metrics" => {
+            if (!role.collector) return http_errors.sendNotFound(&request);
+            if (request.head.method == .POST) {
+                ingest.handleMetrics(&request, arena, qw, worker.server.opts.indices.edges) catch |err| {
+                    std.log.err("metrics ingest error: {}", .{err});
                 };
             } else {
                 request.respond("Method Not Allowed\n", .{

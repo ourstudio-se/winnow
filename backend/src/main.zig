@@ -13,6 +13,7 @@ const logs_otlp = @import("proto/opentelemetry/proto/collector/logs/v1.pb.zig");
 const net = std.net;
 const otel_index = @import("otel_index.zig");
 const otel_logs_index = @import("otel_logs_index.zig");
+const service_edges_index = @import("service_edges_index.zig");
 const otlp = @import("proto/opentelemetry/proto/collector/trace/v1.pb.zig");
 const schema_validation = @import("schema_validation.zig");
 const std = @import("std");
@@ -135,11 +136,15 @@ pub fn main() !void {
 
         // Logs index
         try ensureOrValidateIndex(arena.allocator(), qw, cfg.logs.index_id, otel_logs_index.schema, cfg.logs.retention);
+
+        // Edges index
+        try ensureOrValidateIndex(arena.allocator(), qw, cfg.edges.index_id, service_edges_index.schema, cfg.edges.retention);
     }
 
     const indices = IndexConfig{
         .traces = cfg.traces.index_id,
         .logs = cfg.logs.index_id,
+        .edges = cfg.edges.index_id,
     };
 
     servers_by_port = .init(allocator);
@@ -231,12 +236,19 @@ test "otlp log proto types are importable" {
     _ = logs_otlp.ExportLogsServiceResponse;
 }
 
+test "otlp metrics proto types are importable" {
+    const metrics_otlp = @import("proto/opentelemetry/proto/collector/metrics/v1.pb.zig");
+    _ = metrics_otlp.ExportMetricsServiceRequest;
+    _ = metrics_otlp.ExportMetricsServiceResponse;
+}
+
 test {
     _ = HttpClient;
     _ = Quickwit;
     _ = Server;
     _ = otel_index;
     _ = otel_logs_index;
+    _ = service_edges_index;
     _ = index_schema;
     _ = config_mod;
     _ = schema_validation;
