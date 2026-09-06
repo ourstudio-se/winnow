@@ -49,24 +49,23 @@ pub fn validateSchema(
         try actual_map.put(name, fm_val);
     }
 
-    var mismatches: std.ArrayListUnmanaged(Mismatch) = .{};
-
+    var mismatches: std.ArrayListUnmanaged(Mismatch) = .empty;
 
     for (expected) |exp| {
         const actual_val = actual_map.get(exp.name) orelse {
-            try mismatches.append(arena,.{ .missing_field = exp.name });
+            try mismatches.append(arena, .{ .missing_field = exp.name });
             continue;
         };
         const actual_obj = actual_val.object;
 
         // Check type
         const actual_type = (actual_obj.get("type") orelse {
-            try mismatches.append(arena,.{ .missing_field = exp.name });
+            try mismatches.append(arena, .{ .missing_field = exp.name });
             continue;
         }).string;
 
         if (!std.mem.eql(u8, exp.type, actual_type)) {
-            try mismatches.append(arena,.{ .type_mismatch = .{
+            try mismatches.append(arena, .{ .type_mismatch = .{
                 .field = exp.name,
                 .expected = exp.type,
                 .actual = actual_type,
@@ -82,7 +81,7 @@ pub fn validateSchema(
 
             if (actual_tok) |at| {
                 if (!std.mem.eql(u8, expected_tok, at)) {
-                    try mismatches.append(arena,.{ .tokenizer_mismatch = .{
+                    try mismatches.append(arena, .{ .tokenizer_mismatch = .{
                         .field = exp.name,
                         .expected = expected_tok,
                         .actual = at,

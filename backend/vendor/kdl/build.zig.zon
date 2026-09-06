@@ -1,0 +1,8 @@
+.{
+    .name = .kdl,
+    .version = "0.0.4",
+    .fingerprint = 0xfe567e034509e692,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{""},
+    .dependencies = .{},
+}

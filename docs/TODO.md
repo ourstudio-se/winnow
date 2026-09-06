@@ -310,3 +310,18 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Verify: arrow-key navigation in Add filter dropdown (field and value steps)
 - [x] Raw-query autocomplete dropdown was clipped at the filter bar's bottom edge: `overflow-x-auto` on the bar forces overflow-y to auto, clipping the absolutely-positioned dropdown. Now the bar only clips in chip mode (where chips need horizontal scroll); raw mode leaves overflow visible.
 - [x] Verify: autocomplete dropdown overlays the histogram/table in raw query mode
+
+## Zig 0.16 Upgrade
+
+- [x] Vendor kdl-zig v0.0.4 into `backend/vendor/kdl` (upstream has no 0.16 release; its build scripts break the whole dependency under 0.16). Patched: `ArrayListUnmanaged` `.{}` inits → `.empty`, `preprocessParallel` degraded to single-threaded (`std.Thread.Pool`/`WaitGroup` removed in 0.16). Now a `path` dependency in `build.zig.zon`.
+- [x] Bump zig-protobuf v4.0.0 → v5.0.0 (their 0.16 release); regenerated `src/proto/` and `build.zig.zon2json-lock` (zon2lock)
+- [x] Port to `std.Io`: `main` now takes `std.process.Init` (`init.gpa`, `init.io`, `init.minimal.args`, `init.environ_map`); `std.net` → `std.Io.net`; `std.Thread.WaitGroup` → `std.Io.Group.concurrent`; `ThreadSafeQueue` on `std.Io.Mutex`/`Condition`; `http.Client` takes `.io`; fs/env access via `Io.Dir.cwd()` + `Environ.Map`; sigaction handler takes `std.posix.SIG` enum; `std.json.ObjectMap` is unmanaged now
+- [x] Verify: `zig build` and `zig build test` pass under 0.16
+- [x] Verify: smoke test against stub Quickwit — config file + env override, index creation, static 200 / 404 / 405 routing on both servers, SIGINT graceful shutdown, no leak-check errors
+- [x] Fix `nix build` under zig 0.16 (flake changes):
+  - zig2nix's generated dependency fetcher fails on zip archives (`zig fetch` needs a `tmp/` dir inside a fresh cache dir; zig-protobuf v5 ships protoc binaries as lazy zip deps). Replaced with our own `fetchZigDep` + `linkFarm` in flake.nix (upstream zig2nix dd46d5c still broken); `nix build .#zig-deps` tests it standalone.
+  - Dropped `--system "$ZIG_GLOBAL_CACHE_DIR/p"` from gen-proto/test invocations: the 0.16 link farm holds `<hash>.tar.gz` files, which the package cache accepts but `--system` mode does not.
+  - `pnpmDeps` hash refreshed (`sha256-AXMvjQ...`): the old FOD output predated `fetcherVersion = 4`/pnpm 11, and the unchanged hash masked the stale store contents (ERR_PNPM_NO_OFFLINE_TARBALL).
+- [x] Verify: full `nix build` (frontend + backend incl. checkPhase tests) succeeds — validated with backend src including vendor/ via impure override
+- [ ] Verify: plain `nix build` after `git add backend/vendor .gitignore backend/build.zig.zon backend/build.zig.zon2json-lock flake.nix` (nix ignores untracked files, so vendor/ must be staged)
+- [ ] Verify: full stack against a real Quickwit on :7290

@@ -3,12 +3,12 @@
     .version = "0.0.0",
     .dependencies = .{
         .protobuf = .{
-            .url = "git+https://github.com/Arwalk/zig-protobuf?ref=v4.0.0#622e9e84f6df66758718b1196e1ccd6dd45a8930",
-            .hash = "protobuf-3.0.0-0e82avQuKADcHgDzDixSMGN22hzGEgwFE0tEJUWnWu5Q",
+            .url = "git+https://github.com/Arwalk/zig-protobuf?ref=v5.0.0#b794f99323cead7f1794ae68554d0311cc309857",
+            .hash = "protobuf-5.0.0-0e82ahZiKwC5Yrh4psANoUzrV_H4CQU1EsOIY9Zdyap_",
         },
+        // Vendored: upstream has no Zig 0.16-compatible release (see vendor/kdl/README.md)
         .kdl = .{
-            .url = "https://github.com/AnimeCatGirlIndustries/kdl-zig/archive/v0.0.4.tar.gz",
-            .hash = "kdl-0.0.4-kuYJRYQtBwDr5JGUWKq0THB5AYPGyQ4B6vW55ZqnDBJ2",
+            .path = "vendor/kdl",
         },
     },
     .paths = .{""},

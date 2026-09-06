@@ -5,6 +5,7 @@ dist
 zig-cache
 zig-out
 .zig-cache
+zig-pkg
 
 # Generated protobuf code (regenerate with: zig build gen-proto)
 backend/src/proto/

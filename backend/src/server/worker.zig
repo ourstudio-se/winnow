@@ -27,33 +27,36 @@ const arena_retain_size = 8192;
 server: *Server,
 
 pub fn run(worker: *Worker) void {
+    const io = worker.server.io;
+
     var arena = std.heap.ArenaAllocator.init(worker.server.allocator);
     defer arena.deinit();
 
     // Each worker thread gets its own HTTP client — std.http.Client is not
     // thread-safe and must not be shared across threads.
-    var http_client: std.http.Client = .{ .allocator = worker.server.allocator };
+    var http_client: std.http.Client = .{ .allocator = worker.server.allocator, .io = io };
     defer http_client.deinit();
     const client = HttpClient.init(&http_client);
     const qw = Quickwit.init(client, worker.server.opts.quickwit_url);
 
-    while (worker.server.queue.pop()) |conn| {
+    while (worker.server.queue.pop(io)) |stream| {
         defer _ = arena.reset(.{ .retain_with_limit = arena_retain_size });
-        worker.handleConnection(arena.allocator(), conn, qw);
+        worker.handleConnection(arena.allocator(), stream, qw);
     }
 
     std.log.debug("[THREAD {d}] Worker finished", .{std.Thread.getCurrentId()});
 }
 
-fn handleConnection(worker: *Worker, arena: std.mem.Allocator, conn: std.net.Server.Connection, qw: Quickwit) void {
-    defer conn.stream.close();
+fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.net.Stream, qw: Quickwit) void {
+    const io = worker.server.io;
+    defer stream.close(io);
 
     var read_buf: [read_io_buf_size]u8 = undefined;
     var write_buf: [write_io_buf_size]u8 = undefined;
 
-    var reader = std.net.Stream.Reader.init(conn.stream, &read_buf);
-    var writer = std.net.Stream.Writer.init(conn.stream, &write_buf);
-    var http_server = std.http.Server.init(reader.interface(), &writer.interface);
+    var reader = stream.reader(io, &read_buf);
+    var writer = stream.writer(io, &write_buf);
+    var http_server = std.http.Server.init(&reader.interface, &writer.interface);
 
     var request = http_server.receiveHead() catch |err| {
         std.log.err("failed to receive request: {}", .{err});

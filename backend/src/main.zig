@@ -10,7 +10,6 @@ const http = std.http;
 const index_schema = @import("index_schema.zig");
 const ingest = @import("ingest.zig");
 const logs_otlp = @import("proto/opentelemetry/proto/collector/logs/v1.pb.zig");
-const net = std.net;
 const otel_index = @import("otel_index.zig");
 const otel_logs_index = @import("otel_logs_index.zig");
 const service_edges_index = @import("service_edges_index.zig");
@@ -21,7 +20,7 @@ const std = @import("std");
 var servers_by_port: std.hash_map.AutoHashMap(u16, *Server) = undefined;
 var shutting_down = std.atomic.Value(bool).init(false);
 
-fn handleSigInt(_: i32) callconv(.c) void {
+fn handleSigInt(_: std.posix.SIG) callconv(.c) void {
     shutting_down.store(true, .release);
 }
 
@@ -83,16 +82,14 @@ fn ensureOrValidateIndex(
     }
 }
 
-pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    defer {
-        std.log.debug("deiniting allocator", .{});
-        _ = gpa.deinit();
-    }
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    // init.gpa is leak-checked in Debug builds; init.io is a thread-pool-backed
+    // Io implementation shared by the whole process.
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Parse CLI args and load config
-    const cli = config_mod.parseCli(allocator) catch {
+    const cli = config_mod.parseCli(allocator, init.minimal.args) catch {
         return;
     };
     defer {
@@ -100,7 +97,7 @@ pub fn main() !void {
         if (cli.config_path) |p| allocator.free(p);
     }
 
-    const cfg = config_mod.load(allocator, cli.config_path, cli.explicit) catch |err| {
+    const cfg = config_mod.load(allocator, io, init.environ_map, cli.config_path, cli.explicit) catch |err| {
         std.log.err("failed to load config: {}", .{err});
         return err;
     };
@@ -109,7 +106,7 @@ pub fn main() !void {
         cfg.deinit(allocator);
     }
 
-    var http_client: http.Client = .{ .allocator = allocator };
+    var http_client: http.Client = .{ .allocator = allocator, .io = io };
     defer {
         std.log.debug("deiniting http client", .{});
         http_client.deinit();
@@ -169,7 +166,7 @@ pub fn main() !void {
     }
 
     if (serve.api) |serve_api_cfg| {
-        const server = try Server.create(allocator, .{
+        const server = try Server.create(allocator, io, .{
             .indices = indices,
             .number_of_workers = serve_api_cfg.number_of_workers,
             .port = serve_api_cfg.http_port,
@@ -189,7 +186,7 @@ pub fn main() !void {
             return;
         }
 
-        const server = try Server.create(allocator, .{
+        const server = try Server.create(allocator, io, .{
             .indices = indices,
             .number_of_workers = serve_collector_cfg.number_of_workers,
             .port = serve_collector_cfg.http_port,
@@ -199,19 +196,19 @@ pub fn main() !void {
         try servers_by_port.put(serve_collector_cfg.http_port, server);
     }
 
-    var wg = std.Thread.WaitGroup{};
+    var group: std.Io.Group = .init;
 
     var server_iterator = servers_by_port.valueIterator();
 
     while (server_iterator.next()) |serverPtr| {
-        wg.spawnManager(Server.run, .{serverPtr.*});
+        try group.concurrent(io, Server.run, .{serverPtr.*});
     }
 
     while (true) {
         if (shutting_down.load(.acquire)) {
             break;
         }
-        std.posix.nanosleep(0, 100_000_000);
+        io.sleep(.fromMilliseconds(100), .awake) catch {};
     }
 
     // Tell server threads to close gracefully
@@ -221,7 +218,7 @@ pub fn main() !void {
     }
 
     // Wait for server threads to clean up
-    wg.wait();
+    group.await(io) catch {};
 
     std.log.debug("exiting main thread", .{});
 }

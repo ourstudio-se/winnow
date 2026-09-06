@@ -560,13 +560,13 @@ fn appendUnique(list: *std.ArrayListUnmanaged([]const u8), alloc: Allocator, fp:
 /// Convert an OTel AnyValue body to a JSON object suitable for Quickwit's `json` field type.
 /// Quickwit `json` fields require an object, so non-object values are wrapped as {"message": value}.
 fn bodyToJsonObject(arena: Allocator, body: ?common_pb.AnyValue) !std.json.Value {
-    const any = body orelse return .{ .object = std.json.ObjectMap.init(arena) };
+    const any = body orelse return .{ .object = .empty };
     const val = try anyValueToJsonValue(arena, any);
     return switch (val) {
         .object => val,
         else => blk: {
-            var obj = std.json.ObjectMap.init(arena);
-            try obj.put("message", val);
+            var obj: std.json.ObjectMap = .empty;
+            try obj.put(arena, "message", val);
             break :blk .{ .object = obj };
         },
     };
@@ -584,8 +584,8 @@ fn hexEncode(arena: Allocator, bytes: []const u8) ![]const u8 {
 }
 
 pub fn kvListToJsonValue(arena: Allocator, attrs: []const common_pb.KeyValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(arena);
-    try obj.ensureTotalCapacity(@intCast(attrs.len));
+    var obj: std.json.ObjectMap = .empty;
+    try obj.ensureTotalCapacity(arena, @intCast(attrs.len));
     for (attrs) |kv| {
         const val = if (kv.value) |v| try anyValueToJsonValue(arena, v) else .null;
         obj.putAssumeCapacity(kv.key, val);
@@ -609,10 +609,10 @@ pub fn anyValueToJsonValue(arena: Allocator, any: common_pb.AnyValue) !std.json.
             break :blk .{ .array = items };
         },
         .kvlist_value => |kvl| blk: {
-            var obj = std.json.ObjectMap.init(arena);
+            var obj: std.json.ObjectMap = .empty;
             for (kvl.values.items) |kv| {
                 const val = if (kv.value) |av| try anyValueToJsonValue(arena, av) else .null;
-                try obj.put(kv.key, val);
+                try obj.put(arena, kv.key, val);
             }
             break :blk .{ .object = obj };
         },
@@ -699,7 +699,7 @@ test "kvListToJsonValue" {
     const result = try kvListToJsonValue(arena, &attrs_buf);
     defer {
         var obj = result.object;
-        obj.deinit();
+        obj.deinit(arena);
     }
     try std.testing.expectEqualStrings("GET", result.object.get("http.method").?.string);
     try std.testing.expectEqual(@as(i64, 200), result.object.get("http.status_code").?.integer);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const Io = std.Io;
 
 pub fn ThreadSafeQueue(T: type) type {
     return struct {
@@ -11,17 +12,17 @@ pub fn ThreadSafeQueue(T: type) type {
 
         allocator: std.mem.Allocator,
         closed: std.atomic.Value(bool),
-        cond: std.Thread.Condition = .{},
+        cond: Io.Condition = .init,
         head: ?*Node = null,
-        m: std.Thread.Mutex = .{},
+        m: Io.Mutex = .init,
         tail: ?*Node = null,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .allocator = allocator,
                 .closed = std.atomic.Value(bool).init(false),
-                .m = .{},
-                .cond = .{},
+                .m = .init,
+                .cond = .init,
                 .head = null,
                 .tail = null,
             };
@@ -33,9 +34,9 @@ pub fn ThreadSafeQueue(T: type) type {
             return queue;
         }
 
-        pub fn close(queue: *Self) void {
+        pub fn close(queue: *Self, io: Io) void {
             queue.closed.store(true, .release);
-            queue.cond.broadcast();
+            queue.cond.broadcast(io);
         }
 
         pub fn destroy(queue: *Self) void {
@@ -49,9 +50,9 @@ pub fn ThreadSafeQueue(T: type) type {
             }
         }
 
-        pub fn push(queue: *Self, data: T) error{ QueueClosed, OutOfMemory }!void {
-            queue.m.lock();
-            defer queue.m.unlock();
+        pub fn push(queue: *Self, io: Io, data: T) error{ QueueClosed, OutOfMemory }!void {
+            queue.m.lockUncancelable(io);
+            defer queue.m.unlock(io);
 
             if (queue.closed.load(.acquire)) {
                 return error.QueueClosed;
@@ -69,16 +70,16 @@ pub fn ThreadSafeQueue(T: type) type {
                 queue.head = queue.tail;
             }
 
-            queue.cond.signal();
+            queue.cond.signal(io);
         }
 
-        pub fn pop(queue: *Self) ?T {
-            queue.m.lock();
-            defer queue.m.unlock();
+        pub fn pop(queue: *Self, io: Io) ?T {
+            queue.m.lockUncancelable(io);
+            defer queue.m.unlock(io);
 
             while (queue.head == null) {
                 if (queue.closed.load(.acquire)) return null;
-                queue.cond.wait(&queue.m);
+                queue.cond.waitUncancelable(io, &queue.m);
             }
 
             const head = queue.head.?;

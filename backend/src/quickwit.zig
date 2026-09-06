@@ -98,7 +98,7 @@ pub const Quickwit = struct {
 // -- Tests --
 
 test "init" {
-    var http_client: std.http.Client = .{ .allocator = std.testing.allocator };
+    var http_client: std.http.Client = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     defer http_client.deinit();
     const client = HttpClient.init(&http_client);
     const qw = Quickwit.init(client, "http://localhost:7280");

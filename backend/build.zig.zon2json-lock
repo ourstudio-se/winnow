@@ -1,48 +1,42 @@
 {
-  "protobuf-3.0.0-0e82avQuKADcHgDzDixSMGN22hzGEgwFE0tEJUWnWu5Q": {
+  "protobuf-5.0.0-0e82ahZiKwC5Yrh4psANoUzrV_H4CQU1EsOIY9Zdyap_": {
     "name": "protobuf",
-    "url": "git+https://github.com/Arwalk/zig-protobuf?ref=v4.0.0#622e9e84f6df66758718b1196e1ccd6dd45a8930",
-    "hash": "sha256-9E8Lw9nn5OqOElhrimHMdYaZQ06ouwAweWvMxrEajQM=",
-    "rev": "622e9e84f6df66758718b1196e1ccd6dd45a8930"
+    "url": "git+https://github.com/Arwalk/zig-protobuf?ref=v5.0.0#b794f99323cead7f1794ae68554d0311cc309857",
+    "hash": "sha256-DSL3OmwTdS6/OqHYEXW5HozJhqfE/hLed+H+mEQKamM="
   },
   "N-V-__8AAAOIwgCuuT3IhPlAW6erD8SspcE7iVKY4nbJWLV6": {
     "name": "protoc-linux-64",
     "url": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-win64.zip",
-    "hash": "sha256-aVacvBeM1Xhey32TVpkTEQZ36v60uPgpcMNh+tTHzWY="
+    "hash": "sha256-Zn/JT75W88/eSZj4z5T8tRWHXUiUj+7E6VlFi/Hfsdk="
   },
   "N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ": {
     "name": "protoc-linux-x86_64",
     "url": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-x86_64.zip",
-    "hash": "sha256-6cEpwXa7ffAlRsTNYYUSbKU8iefS8JUR4gkxlwS13X4="
+    "hash": "sha256-fOVVlJloKwIXAeJNG4l1ReUJhpcdkvHbOEMcTbJTMBE="
   },
   "N-V-__8AAHpvrAAEcEurDCWYQt6jTJSozCfLDwkGTptKEyJ7": {
     "name": "protoc-linux-x86_32",
     "url": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-x86_32.zip",
-    "hash": "sha256-IINlU916AkBtuLg49Jxl6KAFVTFRHfZ/88JuvidL414="
+    "hash": "sha256-UhREIurQciJ9eCsSz+WlZQwwhTe1Rhoegggd09ActKY="
   },
   "N-V-__8AAJKMngA8y82sENkRg-JF100BtRa7GQxoBIfU3c3_": {
     "name": "protoc-linux-aarch_64",
     "url": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-aarch_64.zip",
-    "hash": "sha256-SoAu0j1w97rX6xnlo+cks6qWclDVcsrf1TfBupOa7mo="
+    "hash": "sha256-7SLxRIIU39apOdFx+jcdnMd6nSCJdBKe59C8i59wGqc="
   },
   "N-V-__8AANrukAA2AHP6xuzchs_iwsyg1UYhIFhpUR6R0x7K": {
     "name": "protoc-osx-aarch_64",
     "url": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-osx-aarch_64.zip",
-    "hash": "sha256-p7UbIROGJpD6UsYviJGmA3uvuduI1PmSTEht6dm7idU="
+    "hash": "sha256-eiSF1mhg784Pb8nMoMIsR4GzBGbb2EG/ryGcomsOxXs="
   },
   "N-V-__8AAFoXkgBrHnNjViSdp84aL1ciwtWKZdYHK7dSSppd": {
     "name": "protoc-osx-x86_64",
     "url": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-osx-x86_64.zip",
-    "hash": "sha256-+cqltNC1N6z/sP/X1TIlURpVdO+QP8pVDqnnYAmH8Ts="
+    "hash": "sha256-q5k07OPw1WPyeg+kr68caLC7QgmFS5Exl+TQ1MLbOeo="
   },
   "N-V-__8AADKo3ADb6qHynR1iiBhHFQcaoAE0qpLZuh3GtoT2": {
     "name": "protoc-linux-s390",
     "url": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-s390_64.zip",
-    "hash": "sha256-B6AdH7uloBC6Hzh8BWoCozmzVWjH491bAslrlGMDB9s="
-  },
-  "kdl-0.0.4-kuYJRYQtBwDr5JGUWKq0THB5AYPGyQ4B6vW55ZqnDBJ2": {
-    "name": "kdl",
-    "url": "https://github.com/AnimeCatGirlIndustries/kdl-zig/archive/v0.0.4.tar.gz",
-    "hash": "sha256-8nb1NQ9n+++cN/hIjVThbPJowI95VXP73eBfhBB8X0A="
+    "hash": "sha256-IMmgt0BQ0QNHOphz/jQw2RnJ3oKe6gOqp7h3BhXAjzA="
   }
 }

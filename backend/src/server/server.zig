@@ -1,4 +1,6 @@
 const std = @import("std");
+const Io = std.Io;
+const net = std.Io.net;
 const api = @import("../api.zig");
 const ingest = @import("../ingest.zig");
 const static_assets = @import("static_assets.zig");
@@ -21,22 +23,24 @@ const ServerOpts = struct {
 };
 
 allocator: std.mem.Allocator,
+io: Io,
 opts: ServerOpts,
-queue: *tsq.ThreadSafeQueue(std.net.Server.Connection),
+queue: *tsq.ThreadSafeQueue(net.Stream),
 workers: []Worker,
 
-pub fn init(allocator: std.mem.Allocator, opts: ServerOpts, queue: *tsq.ThreadSafeQueue(std.net.Server.Connection), workers: []Worker) Server {
+pub fn init(allocator: std.mem.Allocator, io: Io, opts: ServerOpts, queue: *tsq.ThreadSafeQueue(net.Stream), workers: []Worker) Server {
     return Server{
         .allocator = allocator,
+        .io = io,
         .opts = opts,
         .queue = queue,
         .workers = workers,
     };
 }
 
-pub fn create(allocator: std.mem.Allocator, opts: ServerOpts) error{OutOfMemory}!*Server {
+pub fn create(allocator: std.mem.Allocator, io: Io, opts: ServerOpts) error{OutOfMemory}!*Server {
     const server = try allocator.create(Server);
-    const queue = try tsq.ThreadSafeQueue(std.net.Server.Connection).create(allocator);
+    const queue = try tsq.ThreadSafeQueue(net.Stream).create(allocator);
     const workers = try allocator.alloc(Worker, opts.number_of_workers);
 
     for (0..opts.number_of_workers) |i| {
@@ -45,7 +49,7 @@ pub fn create(allocator: std.mem.Allocator, opts: ServerOpts) error{OutOfMemory}
         };
     }
 
-    server.* = init(allocator, opts, queue, workers);
+    server.* = init(allocator, io, opts, queue, workers);
 
     return server;
 }
@@ -58,10 +62,10 @@ pub fn destroy(server: *Server) void {
 
 pub fn close(server: *Server) void {
     std.log.debug("[THREAD {d}] Closing server for port {d}...", .{ std.Thread.getCurrentId(), server.opts.port });
-    server.queue.close();
+    server.queue.close(server.io);
 }
 
-pub fn listen(server: *Server) !std.net.Server {
+pub fn listen(server: *Server) !net.Server {
     {
         // Log what we are doing
         var roleAl = try std.ArrayList(u8).initCapacity(server.allocator, 255);
@@ -84,27 +88,32 @@ pub fn listen(server: *Server) !std.net.Server {
         std.log.info("{s} listening on http://0.0.0.0:{d}", .{ rolestr, server.opts.port });
     }
 
-    const address = std.net.Address.parseIp("0.0.0.0", server.opts.port) catch unreachable;
-    return address.listen(.{ .reuse_address = true });
+    const address = net.IpAddress.parse("0.0.0.0", server.opts.port) catch unreachable;
+    return address.listen(server.io, .{ .reuse_address = true });
 }
 
 pub fn run(server: *Server) void {
+    const io = server.io;
+
     var listener = server.listen() catch |err| {
         std.log.err("failed to listen to addr: {}", .{err});
         @panic("unrecoverable error in server init");
     };
-    defer listener.deinit();
+    defer listener.deinit(io);
 
-    var wg: std.Thread.WaitGroup = .{};
-    defer wg.wait();
+    var group: Io.Group = .init;
+    defer group.await(io) catch {};
 
     for (server.workers) |*worker| {
-        wg.spawnManager(Worker.run, .{worker});
+        group.concurrent(io, Worker.run, .{worker}) catch |err| {
+            std.log.err("failed to spawn worker: {}", .{err});
+            @panic("unrecoverable error in server init");
+        };
     }
 
     mainloop: while (true) {
         var poll_fd: [1]std.posix.pollfd = .{.{
-            .fd = listener.stream.handle,
+            .fd = listener.socket.handle,
             .events = std.posix.POLL.IN,
             .revents = 0,
         }};
@@ -122,14 +131,14 @@ pub fn run(server: *Server) void {
             continue :mainloop;
         }
 
-        const conn = listener.accept() catch |err| {
+        const stream = listener.accept(io) catch |err| {
             std.log.err("accept error: {}", .{err});
             continue;
         };
 
-        server.queue.push(conn) catch |err| {
+        server.queue.push(io, stream) catch |err| {
             // Since no worker has handled the connection, we need to close it here
-            conn.stream.close();
+            stream.close(io);
 
             switch (err) {
                 error.QueueClosed => {
@@ -160,7 +169,7 @@ test "static asset lookup" {
 }
 
 test {
-    _ = tsq.ThreadSafeQueue(std.net.Server.Connection);
+    _ = tsq.ThreadSafeQueue(net.Stream);
     _ = Worker;
     _ = Server;
 }

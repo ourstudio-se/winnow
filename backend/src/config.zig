@@ -68,8 +68,8 @@ pub const CliResult = struct {
 };
 
 /// Parse CLI arguments for --config flag.
-pub fn parseCli(allocator: Allocator) !CliResult {
-    var args = try std.process.argsWithAllocator(allocator);
+pub fn parseCli(allocator: Allocator, process_args: std.process.Args) !CliResult {
+    var args = try process_args.iterateAllocator(allocator);
     defer args.deinit();
 
     // Skip argv[0]
@@ -95,14 +95,14 @@ pub fn parseCli(allocator: Allocator) !CliResult {
 
 /// Load config: defaults < KDL file < env vars.
 /// If `cli_config_path` is null and `explicit` is false, tries ./winnow.kdl as fallback.
-pub fn load(allocator: Allocator, cli_config_path: ?[]const u8, explicit: bool) !Config {
+pub fn load(allocator: Allocator, io: std.Io, environ_map: *const std.process.Environ.Map, cli_config_path: ?[]const u8, explicit: bool) !Config {
     var cfg = defaults;
 
     // Determine config file path
     const config_path: ?[]const u8 = cli_config_path orelse blk: {
         if (!explicit) {
             // Try ./winnow.kdl as implicit fallback
-            std.fs.cwd().access("winnow.kdl", .{}) catch break :blk null;
+            std.Io.Dir.cwd().access(io, "winnow.kdl", .{}) catch break :blk null;
             break :blk "winnow.kdl";
         }
         break :blk null;
@@ -110,7 +110,7 @@ pub fn load(allocator: Allocator, cli_config_path: ?[]const u8, explicit: bool) 
 
     // Parse KDL file if found
     if (config_path) |path| {
-        const file_content = std.fs.cwd().readFileAlloc(allocator, path, 64 * 1024) catch |err| {
+        const file_content = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024)) catch |err| {
             log.err("failed to read config file '{s}': {}", .{ path, err });
             return error.ConfigFileError;
         };
@@ -125,29 +125,33 @@ pub fn load(allocator: Allocator, cli_config_path: ?[]const u8, explicit: bool) 
     }
 
     // Override with env vars
-    if (std.process.getEnvVarOwned(allocator, "QUICKWIT_URL")) |url| {
+    if (environ_map.get("QUICKWIT_URL")) |url| {
+        const duped = try allocator.dupe(u8, url);
         if (cfg.owned.quickwit_url) allocator.free(cfg.quickwit_url);
-        cfg.quickwit_url = url;
+        cfg.quickwit_url = duped;
         cfg.owned.quickwit_url = true;
-    } else |_| {}
+    }
 
-    if (std.process.getEnvVarOwned(allocator, "WINNOW_TRACES_INDEX")) |idx| {
+    if (environ_map.get("WINNOW_TRACES_INDEX")) |idx| {
+        const duped = try allocator.dupe(u8, idx);
         if (cfg.owned.traces_index_id) allocator.free(cfg.traces.index_id);
-        cfg.traces.index_id = idx;
+        cfg.traces.index_id = duped;
         cfg.owned.traces_index_id = true;
-    } else |_| {}
+    }
 
-    if (std.process.getEnvVarOwned(allocator, "WINNOW_LOGS_INDEX")) |idx| {
+    if (environ_map.get("WINNOW_LOGS_INDEX")) |idx| {
+        const duped = try allocator.dupe(u8, idx);
         if (cfg.owned.logs_index_id) allocator.free(cfg.logs.index_id);
-        cfg.logs.index_id = idx;
+        cfg.logs.index_id = duped;
         cfg.owned.logs_index_id = true;
-    } else |_| {}
+    }
 
-    if (std.process.getEnvVarOwned(allocator, "WINNOW_EDGES_INDEX")) |idx| {
+    if (environ_map.get("WINNOW_EDGES_INDEX")) |idx| {
+        const duped = try allocator.dupe(u8, idx);
         if (cfg.owned.edges_index_id) allocator.free(cfg.edges.index_id);
-        cfg.edges.index_id = idx;
+        cfg.edges.index_id = duped;
         cfg.owned.edges_index_id = true;
-    } else |_| {}
+    }
 
     return cfg;
 }

@@ -78,8 +78,9 @@ pub const HttpClient = struct {
     /// Drop all pooled connections by deiniting and reiniting the inner client.
     fn resetPool(self: HttpClient) void {
         const alloc = self.inner.allocator;
+        const io = self.inner.io;
         self.inner.deinit();
-        self.inner.* = .{ .allocator = alloc };
+        self.inner.* = .{ .allocator = alloc, .io = io };
         log.warn("reset connection pool", .{});
     }
 

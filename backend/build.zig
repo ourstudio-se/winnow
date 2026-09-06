@@ -63,7 +63,7 @@ pub fn build(b: *std.Build) void {
     const force_frontend = b.option(bool, "force-frontend", "Force rebuild of frontend assets") orelse false;
 
     const need_frontend = force_frontend or blk: {
-        b.build_root.handle.access("src/server/static_assets.zig", .{}) catch break :blk true;
+        b.build_root.handle.access(b.graph.io, "src/server/static_assets.zig", .{}) catch break :blk true;
         break :blk false;
     };
 
@@ -71,7 +71,7 @@ pub fn build(b: *std.Build) void {
         // Only run pnpm install if node_modules doesn't exist yet (skip in nix sandbox
         // where the frontend derivation already provides a complete dist/).
         const has_node_modules = blk: {
-            b.build_root.handle.access("../frontend/node_modules", .{}) catch break :blk false;
+            b.build_root.handle.access(b.graph.io, "../frontend/node_modules", .{}) catch break :blk false;
             break :blk true;
         };
 
