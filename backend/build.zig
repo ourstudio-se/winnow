@@ -100,11 +100,16 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     exe_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
     exe_mod.addImport("kdl", kdl_dep.module("kdl"));
 
-    const exe = b.addExecutable(.{ .name = "winnow", .root_module = exe_mod });
+    const exe = b.addExecutable(.{
+        .name = "winnow",
+        .root_module = exe_mod,
+        // .use_llvm = true,
+    });
 
     if (frontend_step) |step| {
         exe.step.dependOn(step);

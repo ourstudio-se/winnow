@@ -1,23 +1,24 @@
 const Allocator = std.mem.Allocator;
-const IndexConfig = api.IndexConfig;
-const quickwit_mod = @import("quickwit.zig");
+const ConfigProvider = @import("config.zig");
 const HttpClient = quickwit_mod.HttpClient;
+const Module = @import("server/module.zig");
 const Quickwit = quickwit_mod.Quickwit;
 const Server = @import("server/server.zig");
 const api = @import("api.zig");
-const config_mod = @import("config.zig");
 const http = std.http;
 const index_schema = @import("index_schema.zig");
 const ingest = @import("ingest.zig");
 const logs_otlp = @import("proto/opentelemetry/proto/collector/logs/v1.pb.zig");
 const otel_index = @import("otel_index.zig");
 const otel_logs_index = @import("otel_logs_index.zig");
-const service_edges_index = @import("service_edges_index.zig");
 const otlp = @import("proto/opentelemetry/proto/collector/trace/v1.pb.zig");
+const quickwit_mod = @import("quickwit.zig");
 const schema_validation = @import("schema_validation.zig");
+const service_edges_index = @import("service_edges_index.zig");
 const std = @import("std");
 
-var servers_by_port: std.hash_map.AutoHashMap(u16, *Server) = undefined;
+var modules: std.StringHashMapUnmanaged(Module) = .{};
+var servers_by_port: std.AutoHashMapUnmanaged(u16, *Server) = .{};
 var shutting_down = std.atomic.Value(bool).init(false);
 
 fn handleSigInt(_: std.posix.SIG) callconv(.c) void {
@@ -88,22 +89,25 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
 
-    // Parse CLI args and load config
-    const cli = config_mod.parseCli(allocator, init.minimal.args) catch {
-        return;
-    };
-    defer {
-        std.log.debug("deiniting config path", .{});
-        if (cli.config_path) |p| allocator.free(p);
-    }
+    var provider = ConfigProvider.initProvider(allocator);
+    try provider.loadFromIo(init);
 
-    const cfg = config_mod.load(allocator, io, init.environ_map, cli.config_path, cli.explicit) catch |err| {
-        std.log.err("failed to load config: {}", .{err});
-        return err;
-    };
     defer {
-        std.log.debug("deiniting config", .{});
-        cfg.deinit(allocator);
+        var servers_it = servers_by_port.valueIterator();
+        while (servers_it.next()) |server| {
+            server.*.destroy();
+        }
+
+        var modules_it = modules.valueIterator();
+        while (modules_it.next()) |module| {
+            module.deinit();
+        }
+
+        servers_by_port.deinit(allocator);
+        defer modules.deinit(allocator);
+
+        std.log.debug("deiniting config provider", .{});
+        provider.deinit();
     }
 
     var http_client: http.Client = .{ .allocator = allocator, .io = io };
@@ -111,6 +115,8 @@ pub fn main(init: std.process.Init) !void {
         std.log.debug("deiniting http client", .{});
         http_client.deinit();
     }
+
+    const cfg = provider.config;
 
     // Determine serving topology from config
     const serve = cfg.serve;
@@ -138,13 +144,11 @@ pub fn main(init: std.process.Init) !void {
         try ensureOrValidateIndex(arena.allocator(), qw, cfg.edges.index_id, service_edges_index.schema, cfg.edges.retention);
     }
 
-    const indices = IndexConfig{
+    const indices = api.IndexConfig{
         .traces = cfg.traces.index_id,
         .logs = cfg.logs.index_id,
         .edges = cfg.edges.index_id,
     };
-
-    servers_by_port = .init(allocator);
 
     var graceful_shutdown: std.posix.Sigaction = .{
         .handler = .{ .handler = handleSigInt },
@@ -154,26 +158,30 @@ pub fn main(init: std.process.Init) !void {
 
     std.posix.sigaction(std.posix.SIG.INT, &graceful_shutdown, null);
 
-    defer {
-        std.log.debug("deiniting servers hashmap", .{});
+    var module_cfg_it = cfg.modules.valueIterator();
+    while (module_cfg_it.next()) |module_cfg| {
+        std.log.info("🔌 Loading module {s} ({s})...", .{ module_cfg.name, module_cfg.dll_path });
+        var module = try Module.init(module_cfg.name, module_cfg.dll_path, &module_cfg.config);
+        errdefer module.deinit();
 
-        var it = servers_by_port.valueIterator();
-        while (it.next()) |server| {
-            server.*.destroy();
-        }
-
-        servers_by_port.deinit();
+        try modules.put(allocator, module_cfg.name, module);
     }
 
     if (serve.api) |serve_api_cfg| {
+        const authorizer_cfg_ptr = if (serve_api_cfg.authorizer) |authorizer_name| cfg.auth.getPtr(authorizer_name) orelse {
+            std.log.err("Authorizer {s} not found\n", .{authorizer_name});
+            return error.MissingAuthorizer;
+        } else null;
         const server = try Server.create(allocator, io, .{
             .indices = indices,
             .number_of_workers = serve_api_cfg.number_of_workers,
             .port = serve_api_cfg.http_port,
             .quickwit_url = cfg.quickwit_url,
             .roles = .{ .api = true },
+            .authorizers = .{ .api = authorizer_cfg_ptr },
+            .modules = &modules,
         });
-        try servers_by_port.put(serve_api_cfg.http_port, server);
+        try servers_by_port.put(allocator, serve_api_cfg.http_port, server);
     }
 
     if (serve.collector) |serve_collector_cfg| {
@@ -186,14 +194,20 @@ pub fn main(init: std.process.Init) !void {
             return;
         }
 
+        const authorizer_cfg_ptr = if (serve_collector_cfg.authorizer) |authorizer_name| cfg.auth.getPtr(authorizer_name) orelse {
+            std.log.err("Authorizer {s} not found\n", .{authorizer_name});
+            return error.MissingAuthorizer;
+        } else null;
         const server = try Server.create(allocator, io, .{
             .indices = indices,
             .number_of_workers = serve_collector_cfg.number_of_workers,
             .port = serve_collector_cfg.http_port,
             .quickwit_url = cfg.quickwit_url,
             .roles = .{ .collector = true },
+            .authorizers = .{ .collector = authorizer_cfg_ptr },
+            .modules = &modules,
         });
-        try servers_by_port.put(serve_collector_cfg.http_port, server);
+        try servers_by_port.put(allocator, serve_collector_cfg.http_port, server);
     }
 
     var group: std.Io.Group = .init;
@@ -247,7 +261,7 @@ test {
     _ = otel_logs_index;
     _ = service_edges_index;
     _ = index_schema;
-    _ = config_mod;
+    _ = ConfigProvider;
     _ = schema_validation;
     _ = ingest;
     _ = api;

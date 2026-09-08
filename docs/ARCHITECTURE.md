@@ -37,7 +37,7 @@
 ## Backend (Zig)
 
 ### Why Zig
-- Single static binary, tiny Docker image
+- Single binary, tiny Docker image
 - No runtime, no GC — predictable latency for an always-on service
 - Fast compile times, lightweight tooling (ZLS doesn't eat your RAM)
 - C interop for any native libs we need if we ever need them
@@ -152,8 +152,8 @@ layer — the swap would be transparent to the frontend and external consumers.
 ## Deployment
 
 ### Docker Image
-Single `FROM scratch` image containing:
-- Zig backend binary (statically linked)
+Minimal image containing:
+- Zig backend binary
 - Frontend assets (embedded in binary or copied to image)
 - Default config
 

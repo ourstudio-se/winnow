@@ -1,44 +1,74 @@
-const std = @import("std");
+const ConfigProvider = @import("../config.zig");
 const Io = std.Io;
-const net = std.Io.net;
-const api = @import("../api.zig");
-const ingest = @import("../ingest.zig");
-const static_assets = @import("static_assets.zig");
-const tsq = @import("../thread_safe_queue.zig");
+const Module = @import("module.zig");
 const Worker = @import("worker.zig");
+const api = @import("../api.zig");
+const auth = @import("auth.zig");
+const ingest = @import("../ingest.zig");
+const net = std.Io.net;
+const static_assets = @import("static_assets.zig");
+const std = @import("std");
+const tsq = @import("../thread_safe_queue.zig");
 
-const ServerRoles = packed struct {
+const log = std.log.scoped(.server);
+
+const Error = error{
+    AuthMissingModule,
+};
+
+const RolesEnabled = packed struct {
     api: bool = false,
     collector: bool = false,
 };
 
+const RoleAuth = struct {
+    api: ?auth.AuthClosure = null,
+    collector: ?auth.AuthClosure = null,
+};
+
+const RoleAuthorizerConfig = struct {
+    api: ?*ConfigProvider.AuthConfig = null,
+    collector: ?*ConfigProvider.AuthConfig = null,
+};
+
 const Server = @This();
 
-const ServerOpts = struct {
-    indices: api.IndexConfig,
+const Opts = struct {
+    roles: RolesEnabled,
     number_of_workers: usize,
     port: u16,
     quickwit_url: []const u8,
-    roles: ServerRoles,
+    indices: api.IndexConfig,
+    authorizers: RoleAuthorizerConfig,
+    modules: *std.StringHashMapUnmanaged(Module),
 };
 
 allocator: std.mem.Allocator,
 io: Io,
-opts: ServerOpts,
+opts: Opts,
 queue: *tsq.ThreadSafeQueue(net.Stream),
 workers: []Worker,
+role_auth: RoleAuth,
 
-pub fn init(allocator: std.mem.Allocator, io: Io, opts: ServerOpts, queue: *tsq.ThreadSafeQueue(net.Stream), workers: []Worker) Server {
+pub fn init(
+    allocator: std.mem.Allocator,
+    io: Io,
+    opts: Opts,
+    queue: *tsq.ThreadSafeQueue(net.Stream),
+    workers: []Worker,
+    role_auth: RoleAuth,
+) Server {
     return Server{
         .allocator = allocator,
         .io = io,
         .opts = opts,
         .queue = queue,
         .workers = workers,
+        .role_auth = role_auth,
     };
 }
 
-pub fn create(allocator: std.mem.Allocator, io: Io, opts: ServerOpts) error{OutOfMemory}!*Server {
+pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts) (error{OutOfMemory} || Error)!*Server {
     const server = try allocator.create(Server);
     const queue = try tsq.ThreadSafeQueue(net.Stream).create(allocator);
     const workers = try allocator.alloc(Worker, opts.number_of_workers);
@@ -49,7 +79,33 @@ pub fn create(allocator: std.mem.Allocator, io: Io, opts: ServerOpts) error{OutO
         };
     }
 
-    server.* = init(allocator, io, opts, queue, workers);
+    // Set up server auth
+
+    var role_auth: RoleAuth = .{};
+
+    if (opts.authorizers.api) |api_authorizer| {
+        switch (api_authorizer.inner_config) {
+            .module => |auth_module_cfg| {
+                const module = opts.modules.getPtr(auth_module_cfg.module_name) orelse {
+                    return Error.AuthMissingModule;
+                };
+                role_auth.api = module.getAuthClosure(api_authorizer.strategy).inner;
+            },
+        }
+    }
+
+    if (opts.authorizers.collector) |collector_authorizer| {
+        switch (collector_authorizer.inner_config) {
+            .module => |auth_module_cfg| {
+                const module = opts.modules.getPtr(auth_module_cfg.module_name) orelse {
+                    return Error.AuthMissingModule;
+                };
+                role_auth.collector = module.getAuthClosure(collector_authorizer.strategy).inner;
+            },
+        }
+    }
+
+    server.* = init(allocator, io, opts, queue, workers, role_auth);
 
     return server;
 }
@@ -61,7 +117,7 @@ pub fn destroy(server: *Server) void {
 }
 
 pub fn close(server: *Server) void {
-    std.log.debug("[THREAD {d}] Closing server for port {d}...", .{ std.Thread.getCurrentId(), server.opts.port });
+    log.debug("[THREAD {d}] Closing server for port {d}...", .{ std.Thread.getCurrentId(), server.opts.port });
     server.queue.close(server.io);
 }
 
@@ -85,7 +141,7 @@ pub fn listen(server: *Server) !net.Server {
         const rolestr = try roleAl.toOwnedSlice(server.allocator);
         defer server.allocator.free(rolestr);
 
-        std.log.info("{s} listening on http://0.0.0.0:{d}", .{ rolestr, server.opts.port });
+        log.info("{s} listening on http://0.0.0.0:{d}", .{ rolestr, server.opts.port });
     }
 
     const address = net.IpAddress.parse("0.0.0.0", server.opts.port) catch unreachable;
@@ -96,7 +152,7 @@ pub fn run(server: *Server) void {
     const io = server.io;
 
     var listener = server.listen() catch |err| {
-        std.log.err("failed to listen to addr: {}", .{err});
+        log.err("failed to listen to addr: {}", .{err});
         @panic("unrecoverable error in server init");
     };
     defer listener.deinit(io);
@@ -106,7 +162,7 @@ pub fn run(server: *Server) void {
 
     for (server.workers) |*worker| {
         group.concurrent(io, Worker.run, .{worker}) catch |err| {
-            std.log.err("failed to spawn worker: {}", .{err});
+            log.err("failed to spawn worker: {}", .{err});
             @panic("unrecoverable error in server init");
         };
     }
@@ -119,7 +175,7 @@ pub fn run(server: *Server) void {
         }};
 
         const connection_ready = std.posix.poll(&poll_fd, 100) catch |err| {
-            std.log.err("polling error: {}", .{err});
+            log.err("polling error: {}", .{err});
             continue :mainloop;
         } > 0;
 
@@ -132,7 +188,7 @@ pub fn run(server: *Server) void {
         }
 
         const stream = listener.accept(io) catch |err| {
-            std.log.err("accept error: {}", .{err});
+            log.err("accept error: {}", .{err});
             continue;
         };
 
@@ -142,18 +198,18 @@ pub fn run(server: *Server) void {
 
             switch (err) {
                 error.QueueClosed => {
-                    std.log.debug("[THREAD {d}] Queue is closed, gracefully exit server", .{std.Thread.getCurrentId()});
+                    log.debug("[THREAD {d}] Queue is closed, gracefully exit server", .{std.Thread.getCurrentId()});
                     break :mainloop;
                 },
                 else => {
-                    std.log.err("failed to push request to queue: {}", .{err});
+                    log.err("failed to push request to queue: {}", .{err});
                     break :mainloop;
                 },
             }
         };
     }
 
-    std.log.debug("cleaning up server", .{});
+    log.debug("cleaning up server", .{});
 }
 
 test "static asset lookup" {

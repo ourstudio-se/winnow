@@ -233,8 +233,8 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Serve embedded assets from `handleStatic()` with correct MIME types and cache headers
 - [x] SPA fallback: unrecognized paths serve `index.html` for client-side routing
 - [x] `packages.frontend` nix derivation builds React app via pnpm
-- [x] `packages.default` nix derivation embeds frontend + builds single static binary
-- [x] Verify: `nix build` produces 8.7MB statically-linked binary with embedded frontend
+- [x] `packages.default` nix derivation embeds frontend + builds single binary
+- [x] Verify: `nix build` produces 8.7MB binary with embedded frontend
 - [x] Integrated frontend build in `build.zig` — auto-detects missing `static_assets.zig`, runs pnpm build + embed; `-Dforce-frontend` flag for explicit rebuild; `zig build check` (ZLS) never triggers frontend; nix `preBuild` still prepares assets so sandbox builds skip pnpm
 - [x] Removed inline `embed-frontend` script from `flake.nix` — uses `scripts/embed-frontend.sh` directly
 
@@ -325,3 +325,12 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Verify: full `nix build` (frontend + backend incl. checkPhase tests) succeeds — validated with backend src including vendor/ via impure override
 - [ ] Verify: plain `nix build` after `git add backend/vendor .gitignore backend/build.zig.zon backend/build.zig.zon2json-lock flake.nix` (nix ignores untracked files, so vendor/ must be staged)
 - [ ] Verify: full stack against a real Quickwit on :7290
+
+## Auth Module (sample_module)
+
+- [x] libjwt 3.6.1 derivation in flake.nix (`libjwt3`, exposed as `packages.libjwt`) — nixpkgs only has 1.18.1; built from GitHub with CMake + jansson + OpenSSL, `WITH_LIBCURL=ON` for `jwks_load_fromurl_cached` (used by `jwt_verify.c`), GnuTLS off. Replaces nixpkgs `libjwt` in the devshell.
+- [x] Auth testing rig: `packages.jwks-server` (serves dummy JWKS on :7292 — 7291 is Quickwit's mapped OTLP gRPC port — generates dev RSA-2048 keypair in `./.dev-jwks` on first run) + `packages.generate-token` (`--claims '{...}' --scopes '...' --sub --ttl`, signs RS256 with the shared key, kid `winnow-dev`). Scripts in `scripts/jwks-server.py` / `scripts/generate-token.py`; both in devshell; `WINNOW_AUTH_JWKS_URL=http://localhost:7292/jwks.json` exported in shellHook; `.dev-jwks` gitignored.
+- [x] Verify: round trip — jwks-server serves JWKS, generate-token output validates against it (RS256, kid match)
+- [ ] Verify: `git add scripts/jwks-server.py scripts/generate-token.py`, then re-enter devshell (nix ignores untracked files; tested out-of-band with the pinned nixpkgs until then)
+- [ ] Verify: sample module `on_auth` accepts a generate-token JWT and rejects a garbage/expired one against the live jwks-server
+- [x] Config KDL string ownership resolved: `loadFromKdlSource` now parses via `kdl.parseReader` (doc gets no source buffer, so all strings are pool-copied by contract — `getBorrowedRef` can't borrow without a source); freeing `kdl_source` in `loadFromIo` is provably safe and the TODO question there is removed. Verified with a temporary aliasing-probe test (config strings don't point into the source buffer; intact after free); `zig build test` 62/62.
