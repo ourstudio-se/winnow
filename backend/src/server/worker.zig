@@ -2,13 +2,22 @@ const quickwit_mod = @import("../quickwit.zig");
 const HttpClient = quickwit_mod.HttpClient;
 const Quickwit = quickwit_mod.Quickwit;
 const Server = @import("server.zig");
+const Module = @import("module.zig");
 const api = @import("../api.zig");
 const ingest = @import("../ingest.zig");
 const static = @import("static.zig");
 const http_errors = @import("http_errors.zig");
 const std = @import("std");
 
+const log = std.log.scoped(.worker);
+
 const Worker = @This();
+
+const RequestRole = enum {
+    api,
+    collector,
+    static,
+};
 
 // 8 KiB standard for buffered i/o on read/write. Used to assign static buffer sizes.
 // This does not limit the size of the request/response, it is a sliding window for
@@ -76,66 +85,76 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.ne
 
     const role = worker.server.opts.roles;
 
+    const req_role: RequestRole = switch (path) {
+        .@"/v1/traces", .@"/v1/logs", .@"/v1/metrics" => .collector,
+        .@"*" => if (std.mem.startsWith(u8, request.head.target, "/api/")) .api else .static,
+    };
+
+    // Preflight checks
+    switch (req_role) {
+        .collector => {
+            if (!role.collector) return http_errors.sendNotFound(&request);
+            if (worker.server.role_auth.collector) |auth| if (!auth.check(&request)) return;
+        },
+        .api => {
+            if (!role.api) return http_errors.sendNotFound(&request);
+            if (worker.server.role_auth.api) |auth| if (!auth.check(&request)) return;
+        },
+        .static => {
+            if (!role.api) return http_errors.sendNotFound(&request);
+        },
+    }
+
     switch (path) {
         .@"/v1/traces" => {
-            if (!role.collector) return http_errors.sendNotFound(&request);
-            if (request.head.method == .POST) {
-                ingest.handleTraces(&request, arena, qw, worker.server.opts.indices.traces) catch |err| {
-                    std.log.err("ingest error: {}", .{err});
-                };
-            } else {
-                request.respond("Method Not Allowed\n", .{
-                    .status = .method_not_allowed,
-                    .extra_headers = &.{
-                        .{ .name = "content-type", .value = "text/plain" },
-                    },
-                }) catch {};
+            if (!requireHttpMethod(&request, .POST)) {
+                return;
             }
+            ingest.handleTraces(&request, arena, qw, worker.server.opts.indices.traces) catch |err| {
+                std.log.err("ingest error: {}", .{err});
+            };
         },
         .@"/v1/logs" => {
-            if (!role.collector) return http_errors.sendNotFound(&request);
-            if (request.head.method == .POST) {
-                ingest.handleLogs(&request, arena, qw, worker.server.opts.indices.logs) catch |err| {
-                    std.log.err("log ingest error: {}", .{err});
-                };
-            } else {
-                request.respond("Method Not Allowed\n", .{
-                    .status = .method_not_allowed,
-                    .extra_headers = &.{
-                        .{ .name = "content-type", .value = "text/plain" },
-                    },
-                }) catch {};
+            if (!requireHttpMethod(&request, .POST)) {
+                return;
             }
+            ingest.handleLogs(&request, arena, qw, worker.server.opts.indices.logs) catch |err| {
+                std.log.err("log ingest error: {}", .{err});
+            };
         },
         .@"/v1/metrics" => {
-            if (!role.collector) return http_errors.sendNotFound(&request);
-            if (request.head.method == .POST) {
-                ingest.handleMetrics(&request, arena, qw, worker.server.opts.indices.edges) catch |err| {
-                    std.log.err("metrics ingest error: {}", .{err});
-                };
-            } else {
-                request.respond("Method Not Allowed\n", .{
-                    .status = .method_not_allowed,
-                    .extra_headers = &.{
-                        .{ .name = "content-type", .value = "text/plain" },
-                    },
-                }) catch {};
+            if (!requireHttpMethod(&request, .POST)) {
+                return;
             }
+            ingest.handleMetrics(&request, arena, qw, worker.server.opts.indices.edges) catch |err| {
+                std.log.err("metrics ingest error: {}", .{err});
+            };
         },
         .@"*" => {
             // "*" is not an actual path, just a wildcard catchall on the path type
             if (std.mem.eql(u8, request.head.target, "*")) return http_errors.sendNotFound(&request);
 
-            if (!role.api) return http_errors.sendNotFound(&request);
-            if (std.mem.startsWith(u8, request.head.target, "/api/")) {
-                api.handleApi(&request, arena, qw, &worker.server.opts.indices) catch |err| {
-                    std.log.err("api error: {}", .{err});
-                };
-            } else {
-                static.handleStatic(&request) catch |err| {
-                    std.log.err("static error: {}", .{err});
-                };
+            switch (req_role) {
+                .api => {
+                    api.handleApi(&request, arena, qw, &worker.server.opts.indices) catch |err| {
+                        std.log.err("api error: {}", .{err});
+                    };
+                },
+                .static => {
+                    static.handleStatic(&request) catch |err| {
+                        std.log.err("static error: {}", .{err});
+                    };
+                },
+                .collector => unreachable,
             }
         },
     }
+}
+
+fn requireHttpMethod(request: *std.http.Server.Request, method: std.http.Method) bool {
+    if (request.head.method == method) {
+        return true;
+    }
+    http_errors.sendMethodNotAllowed(request, method);
+    return false;
 }

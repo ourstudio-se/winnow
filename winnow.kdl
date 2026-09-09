@@ -1,6 +1,24 @@
 serve {
   collector
-  api
+  api auth="winnow-sample-auth"
+}
+
+auth name="winnow-sample-auth" {
+  login_url "http://localhost:8080/login"
+  logout_url "http://localhost:8080/logout"
+
+  strategy "bearer"
+
+  config kind="module" {
+    module "winnow-sample-module"
+  }
+}
+
+module name="winnow-sample-module" {
+  dll "backend/sample_module/zig-out/lib/libwinnow-sample-module.so"
+  config {
+    jwks_issuer_url "http://localhost:7292"
+  }
 }
 
 traces index="winnow-traces-v0_2" retention="90 days"

@@ -15,7 +15,10 @@
   in
     flake-utils.lib.eachDefaultSystem (
       system: let
-        env = zig2nix.outputs.zig-env.${system} {};
+        env = zig2nix.outputs.zig-env.${system} {
+          inherit nixpkgs;
+        };
+
         pkgs = env.pkgs;
         pnpmDeps = pkgs.fetchPnpmDeps {
           pname = "winnow-frontend";
@@ -53,10 +56,40 @@
             path = fetchZigDep {inherit (dep) name url hash;};
           })
           (builtins.fromJSON (builtins.readFile ./backend/build.zig.zon2json-lock)));
+
+        # nixpkgs still ships libjwt 1.x; the sample module needs the 3.x API.
+        libjwt3 = pkgs.stdenv.mkDerivation (finalAttrs: {
+          pname = "libjwt";
+          version = "3.6.1";
+
+          src = pkgs.fetchFromGitHub {
+            owner = "benmcollins";
+            repo = "libjwt";
+            rev = "v${finalAttrs.version}";
+            hash = "sha256-XPo26nmz+0/rMi9wwC1lC2VdWgKRgIqf/6PbevvAuW8=";
+          };
+
+          nativeBuildInputs = [pkgs.cmake pkgs.pkg-config];
+          buildInputs = [pkgs.jansson pkgs.openssl pkgs.curl];
+
+          cmakeFlags = [
+            "-DWITH_GNUTLS=OFF" # auto-detected otherwise; keep the closure deterministic
+            "-DWITH_LIBCURL=ON" # jwks_load_fromurl* used by the sample module
+            "-DWITH_TESTS=OFF"
+          ];
+
+          meta = {
+            description = "JWT C Library";
+            homepage = "https://github.com/benmcollins/libjwt";
+            license = pkgs.lib.licenses.mpl20;
+          };
+        });
       in {
         # Exposed so the dependency fetcher workaround can be tested standalone:
         # `nix build .#zig-deps`
         packages.zig-deps = zigDeps;
+
+        packages.libjwt = libjwt3;
 
         packages.frontend = pkgs.stdenvNoCC.mkDerivation {
           pname = "winnow-frontend";
@@ -132,6 +165,14 @@
             curl
             jq
 
+            # Sample module dependencies
+            libjwt3
+            pkg-config
+
+            # Auth testing rig (dummy JWKS endpoint + token signer)
+            self.packages.${system}.jwks-server
+            self.packages.${system}.generate-token
+
             # Data generation
             self.packages.${system}.generate-data
             self.packages.${system}.nuke-indices
@@ -139,6 +180,7 @@
 
           shellHook = ''
             export QUICKWIT_URL=http://localhost:7290
+            export WINNOW_AUTH_JWKS_URL=http://localhost:7292/jwks.json
             echo "winnow dev shell"
             echo "  zig:  $(zig version)"
             echo "  node: $(node --version)"
@@ -160,6 +202,18 @@
           ];
           doCheck = false;
         } (builtins.readFile ./scripts/generate-data.py);
+
+        # Auth testing rig: jwks-server serves a dummy JWKS (generating a dev
+        # RSA keypair on first run); generate-token signs JWTs with the same
+        # key. They share the keys dir (default ./.dev-jwks, override with
+        # WINNOW_DEV_JWKS_DIR or --keys-dir).
+        packages.jwks-server = pkgs.writers.writePython3Bin "jwks-server" {
+          libraries = with pkgs.python3Packages; [pyjwt cryptography];
+        } (builtins.readFile ./scripts/jwks-server.py);
+
+        packages.generate-token = pkgs.writers.writePython3Bin "generate-token" {
+          libraries = with pkgs.python3Packages; [pyjwt cryptography];
+        } (builtins.readFile ./scripts/generate-token.py);
 
         packages.nuke-indices = pkgs.writeShellScriptBin "nuke-indices" ''
           exec ${pkgs.python3}/bin/python3 ${./scripts/nuke-indices.py} "$@"

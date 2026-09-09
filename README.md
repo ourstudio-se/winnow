@@ -28,7 +28,7 @@ The log viewer supports configurable columns, filters, sortable headers, and a t
 
 Winnow receives OTLP data (traces and logs) over HTTP, transforms it, and ingests it into Quickwit. The frontend provides three connected views: a service map derived from trace data, a trace explorer with span waterfall timelines, and a log viewer. Everything is linked. Click a service to see its traces, click a trace to see its logs, click a log to jump to the span that produced it.
 
-The entire application ships as a single statically-linked binary. The frontend is embedded at build time. Point it at a Quickwit instance and go.
+The entire application ships as a single binary. The frontend is embedded at build time. Point it at a Quickwit instance and go.
 
 ## Stack
 
