@@ -169,9 +169,10 @@
             libjwt3
             pkg-config
 
-            # Auth testing rig (dummy JWKS endpoint + token signer)
+            # Auth testing rig (dummy JWKS endpoint + token signer + faux login)
             self.packages.${system}.jwks-server
             self.packages.${system}.generate-token
+            self.packages.${system}.login-server
 
             # Data generation
             self.packages.${system}.generate-data
@@ -214,6 +215,12 @@
         packages.generate-token = pkgs.writers.writePython3Bin "generate-token" {
           libraries = with pkgs.python3Packages; [pyjwt cryptography];
         } (builtins.readFile ./scripts/generate-token.py);
+
+        # Faux login server for the cookie auth strategy: /login mints a JWT
+        # with the shared dev key and sets it as a cookie, /logout clears it.
+        packages.login-server = pkgs.writers.writePython3Bin "login-server" {
+          libraries = with pkgs.python3Packages; [pyjwt cryptography];
+        } (builtins.readFile ./scripts/login-server.py);
 
         packages.nuke-indices = pkgs.writeShellScriptBin "nuke-indices" ''
           exec ${pkgs.python3}/bin/python3 ${./scripts/nuke-indices.py} "$@"

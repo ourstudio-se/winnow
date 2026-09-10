@@ -242,6 +242,23 @@ fn extractQueryField(body: []const u8) ?[]const u8 {
     return null;
 }
 
+/// GET /api/v1/ui-config — unauthenticated UI bootstrap config (routed in
+/// worker.zig outside the auth gate, since the login URL must be reachable
+/// while logged out).
+pub fn handleUiConfig(
+    request: *http.Server.Request,
+    arena: Allocator,
+    login_url: ?[]const u8,
+    logout_url: ?[]const u8,
+) !void {
+    var buf: Io.Writer.Allocating = .init(arena);
+    try std.json.Stringify.value(.{
+        .login_url = login_url,
+        .logout_url = logout_url,
+    }, .{}, &buf.writer);
+    return respondJson(request, buf.writer.buffered());
+}
+
 fn respondJson(request: *http.Server.Request, body: []const u8) !void {
     try request.respond(body, .{
         .extra_headers = &.{

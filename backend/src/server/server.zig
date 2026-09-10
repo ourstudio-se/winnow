@@ -14,6 +14,7 @@ const log = std.log.scoped(.server);
 
 const Error = error{
     AuthMissingModule,
+    AuthModuleMissingHook,
 };
 
 const RolesEnabled = packed struct {
@@ -22,8 +23,8 @@ const RolesEnabled = packed struct {
 };
 
 const RoleAuth = struct {
-    api: ?auth.AuthClosure = null,
-    collector: ?auth.AuthClosure = null,
+    api: ?auth.Authorizer = null,
+    collector: ?auth.Authorizer = null,
 };
 
 const RoleAuthorizerConfig = struct {
@@ -70,8 +71,13 @@ pub fn init(
 
 pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts) (error{OutOfMemory} || Error)!*Server {
     const server = try allocator.create(Server);
+    errdefer allocator.destroy(server);
+
     const queue = try tsq.ThreadSafeQueue(net.Stream).create(allocator);
+    errdefer queue.destroy();
+
     const workers = try allocator.alloc(Worker, opts.number_of_workers);
+    errdefer allocator.free(workers);
 
     for (0..opts.number_of_workers) |i| {
         workers[i] = .{
@@ -82,6 +88,10 @@ pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts) (error{OutOfMemo
     // Set up server auth
 
     var role_auth: RoleAuth = .{};
+    errdefer {
+        if (role_auth.api) |authorizer| authorizer.destroy(allocator);
+        if (role_auth.collector) |authorizer| authorizer.destroy(allocator);
+    }
 
     if (opts.authorizers.api) |api_authorizer| {
         switch (api_authorizer.inner_config) {
@@ -89,7 +99,10 @@ pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts) (error{OutOfMemo
                 const module = opts.modules.getPtr(auth_module_cfg.module_name) orelse {
                     return Error.AuthMissingModule;
                 };
-                role_auth.api = module.getAuthClosure(api_authorizer.strategy).inner;
+                if (module.ffi.onAuth == null) {
+                    return Error.AuthModuleMissingHook;
+                }
+                role_auth.api = try module.getAuthorizer(api_authorizer.strategy, allocator);
             },
         }
     }
@@ -100,7 +113,10 @@ pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts) (error{OutOfMemo
                 const module = opts.modules.getPtr(auth_module_cfg.module_name) orelse {
                     return Error.AuthMissingModule;
                 };
-                role_auth.collector = module.getAuthClosure(collector_authorizer.strategy).inner;
+                if (module.ffi.onAuth == null) {
+                    return Error.AuthModuleMissingHook;
+                }
+                role_auth.collector = try module.getAuthorizer(collector_authorizer.strategy, allocator);
             },
         }
     }
@@ -113,6 +129,15 @@ pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts) (error{OutOfMemo
 pub fn destroy(server: *Server) void {
     server.queue.destroy();
     server.allocator.free(server.workers);
+
+    if (server.role_auth.api) |authorizer| {
+        authorizer.destroy(server.allocator);
+    }
+
+    if (server.role_auth.collector) |authorizer| {
+        authorizer.destroy(server.allocator);
+    }
+
     server.allocator.destroy(server);
 }
 
