@@ -13,21 +13,34 @@ pub const AuthResult = enum(i32) {
     token_error = 100,
 };
 
-pub const AuthClosure = struct {
-    pub const FunctionPtr = *const fn (*std.http.Server.Request, *anyopaque) AuthResult;
+pub const Authorizer = struct {
+    pub const CheckFn = *const fn (*const anyopaque, *std.http.Server.Request) AuthResult;
+    pub const DestroyFn = *const fn (*const anyopaque, std.mem.Allocator) void;
 
-    f: FunctionPtr,
-    ctx: *anyopaque,
+    pub const VTable = struct {
+        check: CheckFn,
+        destroy: DestroyFn,
+    };
 
-    pub fn init(f: FunctionPtr, ctx: *anyopaque) AuthClosure {
+    vtable: VTable,
+    user_data: *const anyopaque,
+
+    pub fn init(user_data: *const anyopaque, checkFn: CheckFn, destroyFn: DestroyFn) Authorizer {
         return .{
-            .f = f,
-            .ctx = ctx,
+            .vtable = .{
+                .check = checkFn,
+                .destroy = destroyFn,
+            },
+            .user_data = user_data,
         };
     }
 
-    pub fn check(cl: AuthClosure, req: *std.http.Server.Request) bool {
-        return handleAuthResult(req, cl.f(req, cl.ctx));
+    pub fn check(cl: Authorizer, req: *std.http.Server.Request) bool {
+        return handleAuthResult(req, cl.vtable.check(cl.user_data, req));
+    }
+
+    pub fn destroy(cl: Authorizer, allocator: std.mem.Allocator) void {
+        cl.vtable.destroy(cl.user_data, allocator);
     }
 };
 
@@ -45,6 +58,37 @@ pub fn extractBearerToken(request: *std.http.Server.Request) ![]const u8 {
             const slice = header.value[bearer_prefix_length..];
             return slice;
         }
+    }
+
+    return "";
+}
+
+pub fn extractCookie(request: *std.http.Server.Request, cookie_name: []const u8) ![]const u8 {
+    const cookie_str: []const u8 = blk: {
+        var header_it = request.iterateHeaders();
+        while (header_it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, "Cookie")) {
+                break :blk header.value;
+            }
+        }
+        break :blk null;
+    } orelse {
+        return "";
+    };
+
+    var cookies_it = std.mem.splitScalar(u8, cookie_str, ';');
+    while (cookies_it.next()) |cookie_raw| {
+        const sep = '=';
+        const key_raw = std.mem.sliceTo(cookie_raw, sep);
+        if (key_raw.len == cookie_raw.len) {
+            continue;
+        }
+        const key = std.mem.trim(u8, key_raw, " ");
+        if (!std.ascii.eqlIgnoreCase(key, cookie_name)) {
+            continue;
+        }
+        const value = std.mem.trim(u8, cookie_raw[key_raw.len + 1 ..], " ");
+        return value;
     }
 
     return "";

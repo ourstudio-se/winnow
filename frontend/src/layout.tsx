@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Outlet } from "react-router";
 import { SidebarNav } from "@/components/sidebar-nav";
+import { LogoutButton } from "@/components/logout-button";
+import { AuthErrorView } from "@/components/auth-error";
+import { onAuthFailure, type AuthFailure } from "@/lib/auth";
 import logoExpanded from "@/assets/winnow_logo_dark_expanded.png";
 import logoCollapsed from "@/assets/winnow_logo_dark_collapsed.png";
 
@@ -14,6 +17,9 @@ function readCollapsed(): boolean {
 
 export function Layout() {
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [authFailure, setAuthFailure] = useState<AuthFailure | null>(null);
+
+  useEffect(() => onAuthFailure(setAuthFailure), []);
 
   const toggle = useCallback(() => {
     setCollapsed((prev) => {
@@ -38,6 +44,15 @@ export function Layout() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [toggle]);
 
+  if (authFailure) {
+    return (
+      <AuthErrorView
+        kind={authFailure}
+        onRetry={() => setAuthFailure(null)}
+      />
+    );
+  }
+
   return (
     <div className="flex h-screen">
       <aside
@@ -60,6 +75,9 @@ export function Layout() {
         </button>
         <div className={`flex flex-1 flex-col overflow-hidden py-3 ${collapsed ? "items-center" : "px-2"}`}>
           <SidebarNav collapsed={collapsed} />
+          <div className={`mt-auto flex flex-col ${collapsed ? "items-center" : ""}`}>
+            <LogoutButton collapsed={collapsed} />
+          </div>
         </div>
       </aside>
       <main className="flex flex-1 flex-col overflow-hidden">

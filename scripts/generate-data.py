@@ -9,7 +9,7 @@ Simulates a microservice topology:
 
 Usage:
   pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http
-  python scripts/generate-data.py [--endpoint http://localhost:4318] [--requests 20]
+  python scripts/generate-data.py [--endpoint http://localhost:9999] [--requests 20]
 """
 
 import argparse
@@ -248,8 +248,8 @@ def main():
     )
     parser.add_argument(
         "--endpoint",
-        default="http://localhost:4318",
-        help="Backend endpoint (default: http://localhost:4318)",
+        default="http://localhost:9999",
+        help="Backend endpoint (default: http://localhost:9999)",
     )
     parser.add_argument(
         "--requests",

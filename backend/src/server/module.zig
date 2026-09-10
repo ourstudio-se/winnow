@@ -63,11 +63,11 @@ const FFI = struct {
 
     const OnModuleInit = *const fn (ctx: ModuleInitContext) callconv(.c) c_int;
     const OnModuleDeinit = *const fn () callconv(.c) void;
-    const OnBearerAuth = *const fn (bearer_token: StringView) callconv(.c) c_int;
+    const OnAuth = *const fn (bearer_token: StringView) callconv(.c) c_int;
 
     onModuleInit: ?OnModuleInit = null,
     onModuleDeinit: ?OnModuleDeinit = null,
-    onBearerAuth: ?OnBearerAuth = null,
+    onAuth: ?OnAuth = null,
 
     fn logDebug(message: StringView) callconv(.c) void {
         log.debug("{s}", .{message.slice()});
@@ -104,30 +104,108 @@ const FFI = struct {
     }
 };
 
-pub const AuthClosure = struct {
-    inner: auth.AuthClosure,
+pub const BearerAuthorizer = struct {
+    module: *Module,
 
-    pub fn init(module: *Module) @This() {
-        return .{
-            .inner = .init(handleBearerAuth, module),
+    pub fn create(module: *Module, allocator: std.mem.Allocator) error{OutOfMemory}!*BearerAuthorizer {
+        const authorizer = try allocator.create(BearerAuthorizer);
+        authorizer.* = .{
+            .module = module,
         };
+        return authorizer;
     }
 
-    fn handleBearerAuth(req: *std.http.Server.Request, ctx: *anyopaque) auth.AuthResult {
+    pub fn iface(authorizer: *const BearerAuthorizer) auth.Authorizer {
+        return .{
+            .user_data = authorizer,
+            .vtable = .{
+                .destroy = destroy,
+                .check = check,
+            },
+        };
+    }
+    pub fn destroy(user_data: *const anyopaque, allocator: std.mem.Allocator) void {
+        const authorizer: *const BearerAuthorizer = @ptrCast(@alignCast(user_data));
+        allocator.destroy(authorizer);
+    }
+
+    pub fn check(user_data: *const anyopaque, req: *std.http.Server.Request) auth.AuthResult {
+        const authorizer: *const BearerAuthorizer = @ptrCast(@alignCast(user_data));
         const token = auth.extractBearerToken(req) catch |err| {
             log.err("extracting bearer token: {}", .{err});
             return .token_error;
         };
 
-        const result = @as(*const Module, @ptrCast(@alignCast(ctx))).onBearerAuth(token) catch |err| {
-            log.err("module bearer authorization error: {}", .{err});
+        const result = authorizer.module.onAuth(token) catch |err| {
+            log.err("module authorization error: {}", .{err});
             return .unexpected_error;
         } orelse {
-            // Module does not implement on_bearer_auth, noop
-            return .ok;
+            log.err("module does not implement on_auth", .{});
+            return .unexpected_error;
         };
 
         return result.toAuthResult();
+    }
+};
+
+pub const CookieAuthorizer = struct {
+    module: *Module,
+    cookie_name: []const u8,
+
+    pub fn create(module: *Module, cookie_name: []const u8, allocator: std.mem.Allocator) error{OutOfMemory}!*CookieAuthorizer {
+        const authorizer = try allocator.create(CookieAuthorizer);
+        authorizer.* = .{
+            .module = module,
+            .cookie_name = cookie_name,
+        };
+        return authorizer;
+    }
+
+    pub fn iface(authorizer: *const CookieAuthorizer) auth.Authorizer {
+        return .{
+            .user_data = authorizer,
+            .vtable = .{
+                .destroy = destroy,
+                .check = check,
+            },
+        };
+    }
+
+    pub fn destroy(user_data: *const anyopaque, allocator: std.mem.Allocator) void {
+        const authorizer: *const CookieAuthorizer = @ptrCast(@alignCast(user_data));
+        allocator.destroy(authorizer);
+    }
+
+    pub fn check(user_data: *const anyopaque, req: *std.http.Server.Request) auth.AuthResult {
+        const authorizer: *const CookieAuthorizer = @ptrCast(@alignCast(user_data));
+        const token = auth.extractCookie(req, authorizer.cookie_name) catch |err| {
+            log.err("extracting cookie token: {}", .{err});
+            return .token_error;
+        };
+
+        const result = authorizer.module.onAuth(token) catch |err| {
+            log.err("module token authorization error: {}", .{err});
+            return .unexpected_error;
+        } orelse {
+            log.err("module does not implement on_auth", .{});
+            return .unexpected_error;
+        };
+
+        return result.toAuthResult();
+    }
+};
+
+const BearerAuthUserData = struct {
+    module: *Module,
+};
+
+const CookieAuthUserData = struct {
+    module: *Module,
+    cookie_name: []const u8,
+
+    pub fn deinit(ptr: *anyopaque, allocator: std.mem.Allocator) void {
+        const user_data: @This() = @ptrCast(@alignCast(ptr));
+        allocator.destroy(user_data);
     }
 };
 
@@ -186,9 +264,9 @@ pub fn init(
         ffi.onModuleDeinit = on_module_deinit;
     }
 
-    if (dll.lookup(FFI.OnBearerAuth, "on_bearer_auth")) |on_bearer_auth| {
-        log.info("Registered on_bearer_auth hook", .{});
-        ffi.onBearerAuth = on_bearer_auth;
+    if (dll.lookup(FFI.OnAuth, "on_auth")) |on_auth| {
+        log.info("Registered on_auth hook", .{});
+        ffi.onAuth = on_auth;
     }
 
     var module = Module{
@@ -232,8 +310,8 @@ pub fn onModuleDeinit(module: *const Module) void {
     }
 }
 
-pub fn onBearerAuth(module: *const Module, token: []const u8) Error!?ModuleAuthResult {
-    if (module.ffi.onBearerAuth) |hook| {
+pub fn onAuth(module: *const Module, token: []const u8) Error!?ModuleAuthResult {
+    if (module.ffi.onAuth) |hook| {
         const token_sv: FFI.StringView = .init(token);
         const r = hook(token_sv);
         return std.enums.fromInt(ModuleAuthResult, r) orelse Error.FFIOnAuthIllegalResultCode;
@@ -241,14 +319,13 @@ pub fn onBearerAuth(module: *const Module, token: []const u8) Error!?ModuleAuthR
     return null;
 }
 
-pub fn getOnBearerAuthClosure(module: *Module) AuthClosure {
-    return AuthClosure.init(module);
-}
-
-pub fn getAuthClosure(module: *Module, strategy: ConfigProvider.AuthConfig.Strategy) AuthClosure {
-    switch (strategy) {
-        .bearer => {
-            return module.getOnBearerAuthClosure();
-        },
-    }
+pub fn getAuthorizer(
+    module: *Module,
+    strategy: ConfigProvider.AuthConfig.Strategy,
+    allocator: std.mem.Allocator,
+) error{OutOfMemory}!auth.Authorizer {
+    return switch (strategy) {
+        .bearer => (try BearerAuthorizer.create(module, allocator)).iface(),
+        .cookie => |cookie_opts| (try CookieAuthorizer.create(module, cookie_opts.cookie_name, allocator)).iface(),
+    };
 }

@@ -50,8 +50,18 @@ pub const AuthConfig = struct {
         module,
     };
 
-    pub const Strategy = enum {
+    pub const StrategyType = enum {
         bearer,
+        cookie,
+    };
+
+    pub const StrategyCookieOptions = struct {
+        cookie_name: []const u8,
+    };
+
+    pub const Strategy = union(StrategyType) {
+        bearer: struct {},
+        cookie: StrategyCookieOptions,
     };
 
     pub const InnerConfig = union(Kind) {
@@ -223,16 +233,20 @@ pub fn loadFromIo(provider: *ConfigProvider, init: std.process.Init) Error!void 
 
 pub fn loadFromKdlSource(provider: *ConfigProvider, kdl_source: []const u8) Error!void {
     var reader = std.Io.Reader.fixed(kdl_source);
-    provider.kdl_doc = kdl.parseReader(provider.allocator, &reader) catch |err| {
+    var kdl_doc = kdl.parseReader(provider.allocator, &reader) catch |err| {
         log.err("Failed to parse config file: {}", .{err});
 
         return Error.ConfigParseError;
     };
+    errdefer kdl_doc.deinit();
 
-    try provider.parseKdlRoot();
+    try provider.parseKdlRoot(&kdl_doc);
+
+    // Provider now owns the document
+    provider.kdl_doc = kdl_doc;
 }
 
-fn parseKdlAuthInnerConfigNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle, inner_config: *?AuthConfig.InnerConfig) Error!void {
+fn parseKdlAuthInnerConfigNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle, inner_config: *?AuthConfig.InnerConfig) Error!void {
     const configKind = enum {
         module,
     };
@@ -254,7 +268,7 @@ fn parseKdlAuthInnerConfigNode(provider: *ConfigProvider, doc: *kdl.Document, no
     }
 }
 
-fn parseKdlAuthModuleConfigNode(_: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle, inner_config: *?AuthConfig.InnerConfig) Error!void {
+fn parseKdlAuthModuleConfigNode(_: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle, inner_config: *?AuthConfig.InnerConfig) Error!void {
     const childType = enum {
         module,
     };
@@ -283,12 +297,13 @@ fn parseKdlAuthModuleConfigNode(_: *ConfigProvider, doc: *kdl.Document, node: kd
     };
 }
 
-fn parseKdlAuthNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle) Error!void {
+fn parseKdlAuthNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
     const childNodeType = enum {
         login_url,
         logout_url,
         config,
         strategy,
+        cookie_name,
     };
 
     const auth_name = getStringProp(doc, node, "name") orelse {
@@ -297,8 +312,9 @@ fn parseKdlAuthNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.Nod
 
     var login_url: ?[]const u8 = null;
     var logout_url: ?[]const u8 = null;
-    var strategy: ?AuthConfig.Strategy = null;
+    var strategy_type: ?AuthConfig.StrategyType = null;
     var inner_config: ?AuthConfig.InnerConfig = null;
+    var cookie_name: ?[]const u8 = null;
 
     var child_it = doc.childIterator(node);
     while (child_it.next()) |child| {
@@ -326,13 +342,35 @@ fn parseKdlAuthNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.Nod
                     log.err("Strategy in auth block {s} is missing an argument", .{auth_name});
                     return Error.ConfigParseError;
                 };
-                strategy = std.meta.stringToEnum(AuthConfig.Strategy, strategy_raw) orelse {
+                strategy_type = std.meta.stringToEnum(AuthConfig.StrategyType, strategy_raw) orelse {
                     log.err("Unknown strategy in auth block {s}: {s}", .{ auth_name, strategy_raw });
+                    return Error.ConfigParseError;
+                };
+            },
+            .cookie_name => {
+                cookie_name = getStringArg(doc, child, 0) orelse {
                     return Error.ConfigParseError;
                 };
             },
         }
     }
+
+    const strategy = if (strategy_type) |t| switch (t) {
+        .bearer => AuthConfig.Strategy{
+            .bearer = .{},
+        },
+        .cookie => AuthConfig.Strategy{
+            .cookie = .{
+                .cookie_name = cookie_name orelse {
+                    log.err("Cookie strategy must have cookie_name parameter set on auth block {s}", .{auth_name});
+                    return Error.ConfigParseError;
+                },
+            },
+        },
+    } else {
+        log.err("Missing strategy in auth block {s}", .{auth_name});
+        return Error.ConfigParseError;
+    };
 
     const auth = AuthConfig{
         .name = auth_name,
@@ -348,16 +386,13 @@ fn parseKdlAuthNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.Nod
             log.err("Missing logout_url in auth block {s}", .{auth_name});
             return Error.ConfigParseError;
         },
-        .strategy = strategy orelse {
-            log.err("Missing strategy in auth block {s}", .{auth_name});
-            return Error.ConfigParseError;
-        },
+        .strategy = strategy,
     };
 
     try provider.config.auth.put(provider.allocator, auth_name, auth);
 }
 
-fn parseKdlEdgesNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle) Error!void {
+fn parseKdlEdgesNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
     if (getStringProp(doc, node, "index")) |idx| {
         provider.config.edges.index_id = idx;
     }
@@ -366,7 +401,7 @@ fn parseKdlEdgesNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.No
     }
 }
 
-fn parseKdlLogsNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle) Error!void {
+fn parseKdlLogsNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
     if (getStringProp(doc, node, "index")) |idx| {
         provider.config.logs.index_id = idx;
     }
@@ -377,7 +412,7 @@ fn parseKdlLogsNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.Nod
 
 fn parseKdlModuleInnerConfigNode(
     provider: *ConfigProvider,
-    doc: *kdl.Document,
+    doc: *const kdl.Document,
     node: kdl.NodeHandle,
     inner_config_map: *std.StringArrayHashMapUnmanaged([]const u8),
 ) Error!void {
@@ -393,7 +428,7 @@ fn parseKdlModuleInnerConfigNode(
     }
 }
 
-fn parseKdlModuleNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle) Error!void {
+fn parseKdlModuleNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
     const module_name = getStringProp(doc, node, "name") orelse {
         return Error.ConfigParseError;
     };
@@ -436,18 +471,13 @@ fn parseKdlModuleNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.N
     try provider.config.modules.put(provider.allocator, module_name, module_config);
 }
 
-fn parseKdlQuickwitNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle) Error!void {
+fn parseKdlQuickwitNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
     if (getStringProp(doc, node, "url")) |url| {
         provider.config.quickwit_url = url;
     }
 }
 
-fn parseKdlRoot(provider: *ConfigProvider) Error!void {
-    if (provider.kdl_doc == null) {
-        return;
-    }
-    var doc = &provider.kdl_doc.?;
-
+fn parseKdlRoot(provider: *ConfigProvider, doc: *const kdl.Document) Error!void {
     const rootNodeType = enum {
         serve,
         auth,
@@ -492,7 +522,7 @@ fn parseKdlRoot(provider: *ConfigProvider) Error!void {
     }
 }
 
-fn parseKdlServeNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle) Error!void {
+fn parseKdlServeNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
     provider.config.serve = .{
         .api = null,
         .collector = null,
@@ -510,7 +540,7 @@ fn parseKdlServeNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.No
     }
 }
 
-fn parseKdlServeVariantNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle) Error!void {
+fn parseKdlServeVariantNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
     const nodeType = enum {
         api,
         collector,
@@ -558,7 +588,7 @@ fn parseKdlServeVariantNode(provider: *ConfigProvider, doc: *kdl.Document, node:
     }
 }
 
-fn parseKdlTracesNode(provider: *ConfigProvider, doc: *kdl.Document, node: kdl.NodeHandle) Error!void {
+fn parseKdlTracesNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
     if (getStringProp(doc, node, "index")) |idx| {
         provider.config.traces.index_id = idx;
     }

@@ -1,13 +1,14 @@
 serve {
-  collector
+  collector http_port="9999"
   api auth="winnow-sample-auth"
 }
 
 auth name="winnow-sample-auth" {
-  login_url "http://localhost:8080/login"
-  logout_url "http://localhost:8080/logout"
+  login_url "http://localhost:3005/login?return_to={winnow_return_url}"
+  logout_url "http://localhost:3005/logout"
 
-  strategy "bearer"
+  strategy "cookie"
+  cookie_name "jwt"
 
   config kind="module" {
     module "winnow-sample-module"

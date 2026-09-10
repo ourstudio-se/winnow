@@ -78,6 +78,7 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.ne
         @"/v1/traces",
         @"/v1/logs",
         @"/v1/metrics",
+        @"/api/v1/ui-config",
         @"*",
     };
 
@@ -87,6 +88,9 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.ne
 
     const req_role: RequestRole = switch (path) {
         .@"/v1/traces", .@"/v1/logs", .@"/v1/metrics" => .collector,
+        // ui-config must be reachable while logged out (it carries the login
+        // URL), so it gets the static classification: api role, no auth.
+        .@"/api/v1/ui-config" => .static,
         .@"*" => if (std.mem.startsWith(u8, request.head.target, "/api/")) .api else .static,
     };
 
@@ -128,6 +132,20 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.ne
             }
             ingest.handleMetrics(&request, arena, qw, worker.server.opts.indices.edges) catch |err| {
                 std.log.err("metrics ingest error: {}", .{err});
+            };
+        },
+        .@"/api/v1/ui-config" => {
+            if (!requireHttpMethod(&request, .GET)) {
+                return;
+            }
+            const auth_cfg = worker.server.opts.authorizers.api;
+            api.handleUiConfig(
+                &request,
+                arena,
+                if (auth_cfg) |cfg| cfg.login_url else null,
+                if (auth_cfg) |cfg| cfg.logout_url else null,
+            ) catch |err| {
+                std.log.err("ui-config error: {}", .{err});
             };
         },
         .@"*" => {

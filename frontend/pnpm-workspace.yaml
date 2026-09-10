@@ -1,0 +1,4 @@
+allowBuilds:
+  # Transitive dep of the shadcn CLI only (registry HTTP mocking); its
+  # postinstall provisions browser service-worker artifacts we never use.
+  msw: false

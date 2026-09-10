@@ -1,3 +1,9 @@
+import {
+  clearReloginMarker,
+  redirectToLogin,
+  signalForbidden,
+} from "@/lib/auth";
+
 export interface FieldMapping {
   name: string;
   type: string;
@@ -41,6 +47,26 @@ class ApiError extends Error {
 }
 
 /**
+ * Shared response gate: routes auth failures to the auth layer (401 →
+ * login redirect, 403 → forbidden page) before throwing for the caller's
+ * error state.
+ */
+async function ensureOk(res: Response): Promise<Response> {
+  if (res.ok) {
+    // Auth works; drop the post-login marker so it doesn't linger in the
+    // URL (see RELOGIN_PARAM in lib/auth.ts).
+    clearReloginMarker();
+    return res;
+  }
+  if (res.status === 401) {
+    void redirectToLogin();
+  } else if (res.status === 403) {
+    signalForbidden();
+  }
+  throw new ApiError(res.status, await res.text());
+}
+
+/**
  * Translate ES-style sort syntax ("-field" = descending, "field" = ascending)
  * to Quickwit's, which is inverted: a bare field sorts descending and a "-"
  * prefix means ascending. App code uses ES-style throughout.
@@ -67,9 +93,7 @@ async function searchIndex<T>(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text());
-  }
+  await ensureOk(res);
   return res.json();
 }
 
@@ -89,9 +113,7 @@ async function getMetadata(
   category: "traces" | "logs",
 ): Promise<IndexMetadataResponse> {
   const res = await fetch(`/api/v1/${category}/metadata`);
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text());
-  }
+  await ensureOk(res);
   return res.json();
 }
 
@@ -117,8 +139,6 @@ export async function fetchServiceGraph(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
   });
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text());
-  }
+  await ensureOk(res);
   return res.json();
 }

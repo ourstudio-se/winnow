@@ -215,7 +215,7 @@ int on_module_init(ModuleInitContext init_ctx) {
 void on_module_deinit() { deinit_jwks(); }
 
 // Multi-threaded
-int on_bearer_auth(StringView bearer_token) {
+int on_auth(StringView bearer_token) {
   int ret = AUTH_RESULT_OK;
   jwt_checker_t *checker = NULL;
 
@@ -223,7 +223,7 @@ int on_bearer_auth(StringView bearer_token) {
     return AUTH_RESULT_UNAUTHENTICATED;
   }
 
-#define max_token_len 1023
+#define max_token_len 8191
 
   if (bearer_token.len > max_token_len) {
     log_errf("Bearer token must not exceed %d bytes", max_token_len);
@@ -258,6 +258,14 @@ int on_bearer_auth(StringView bearer_token) {
 
   if (jwt_checker_verify(checker, token) != 0) {
     ret = AUTH_RESULT_UNAUTHENTICATED;
+    goto checker_error;
+  }
+
+  static const char *required_claims[] = {"exp",
+                                          "sub",
+                                          /* "iat", "aud", ... */};
+  if (jwt_checker_require(checker, required_claims, 1) != 0) {
+    ret = AUTH_RESULT_UNEXPECTED_ERROR;
     goto checker_error;
   }
 

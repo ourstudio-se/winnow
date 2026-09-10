@@ -105,10 +105,12 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
     exe_mod.addImport("kdl", kdl_dep.module("kdl"));
 
+    const use_llvm = b.option(bool, "llvm", "Force the LLVM backend") orelse false;
+
     const exe = b.addExecutable(.{
         .name = "winnow",
         .root_module = exe_mod,
-        // .use_llvm = true,
+        .use_llvm = use_llvm,
     });
 
     if (frontend_step) |step| {
