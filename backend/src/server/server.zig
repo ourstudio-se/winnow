@@ -13,30 +13,10 @@ const tsq = @import("../thread_safe_queue.zig");
 
 const log = std.log.scoped(.server);
 
-const Error = error{
-    AuthMissingModule,
-    AuthModuleMissingHook,
-};
-
 pub const Roles = struct {
     api: ?Role = null,
     collector: ?Role = null,
     ui: ?Role = null,
-};
-
-const RolesEnabled = packed struct {
-    api: bool = false,
-    collector: bool = false,
-};
-
-const RoleAuth = struct {
-    api: ?auth.Authorizer = null,
-    collector: ?auth.Authorizer = null,
-};
-
-const RoleAuthorizerConfig = struct {
-    api: ?*ConfigProvider.AuthConfig = null,
-    collector: ?*ConfigProvider.AuthConfig = null,
 };
 
 const Server = @This();
@@ -73,7 +53,7 @@ pub fn init(
     };
 }
 
-pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts, roles: Roles) (error{OutOfMemory} || Error)!*Server {
+pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts, roles: Roles) error{OutOfMemory}!*Server {
     const server = try allocator.create(Server);
     errdefer allocator.destroy(server);
 
