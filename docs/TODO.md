@@ -159,8 +159,11 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 
 - [x] Backend: `api_url` param on the ui role config; ui role proxies `/api/*` requests to it (`server/proxy.zig`), so the frontend always talks to its own origin — no CORS needed
 - [x] Frontend: reverted the earlier `api_url`-injection approach (`apiFetch()` in `lib/api.ts`, `api_url` in `lib/config.ts`) — superseded by the ui→api proxy; all fetches are origin-relative again
-- [ ] `zig build test`: all 61 tests pass, but the run exits 1 because `parseKdl serve block with no children is error` triggers `log.err("serve node must have at least one role")` and the test runner fails on error-level logs (masked by the zig test cache on unchanged trees — force a rerun to reproduce)
-- [ ] Verify: run ui and api roles on separate ports with `api_url` set, confirm requests proxy through the ui node to the api node
+- [x] `zig build test`: exit-1 from error-level log in the intentional-failure test fixed (one-line log fix); build + all tests green
+- [x] Branch code review (10 confirmed findings): 9 fixed — ensure_indices defaults regression, double 405/404 respond, proxy response framing headers, duplicate-port clobber, Allow-header separator, per-request http.Client, dead server.zig scaffolding, std.Uri migration fallout, startup role errdefer. Dismissed: ui-config-behind-auth (auth on ui node is unsupported config) and dual routing tables (fine at current scale)
+- [ ] Reword stale doc comment on `handleUiConfig` (api.zig): still claims ui-config is "routed outside the auth gate" — no longer guaranteed if an authorizer is set on the ui role
+- [x] Connection policy: one request per connection, announced via `connection: close` (forced centrally by `request.head.keep_alive = false` in worker.zig). Keep-alive was tried and reverted: idle timeouts are required to protect the fixed worker pool, but SO_RCVTIMEO panics Io.Threaded (EAGAIN = checked illegal state in netReadPosix) and poll-based timeouts added more complexity than the feature is worth here. `std.http.Client` honors the close announcement (marks connection closing, no pooling), so the proxy's shared client is safe.
+- [x] Verify: split-node dev config (api:8080 + ui:3020 + collector:9999) — ui-config served on ui node (200, string URLs), three successive `/api/v1/traces/search` POSTs proxied ui→api all returned 401 (cookie auth, no cookie) with no WriteFailed; responses carry `connection: close`
 
 ## Stable API Endpoints (replace dynamic index routing)
 
