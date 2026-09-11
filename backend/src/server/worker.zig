@@ -79,6 +79,15 @@ fn handleConnection(worker: *Worker, stream: std.Io.net.Stream, ctx: Context) vo
         return;
     };
 
+    // One request per connection, by policy: keep-alive would require idle
+    // timeouts to keep workers from being held by open connections, and
+    // Io.Threaded forbids the kernel-level ones (EAGAIN is a checked illegal
+    // state in its read path). Forcing this false makes every respond() call
+    // announce `connection: close`, so well-behaved clients (browsers, our
+    // proxy's http.Client pool) never try to reuse the connection we are
+    // about to close.
+    request.head.keep_alive = false;
+
     const pathType = enum {
         @"/v1/traces",
         @"/v1/logs",
