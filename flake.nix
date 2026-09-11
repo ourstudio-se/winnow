@@ -115,8 +115,24 @@
             version = "0.0.0";
             src = ./backend;
 
-            # protoc is needed for the gen-proto build step
-            nativeBuildInputs = [pkgs.protobuf];
+            # protoc is needed for the gen-proto build step, patchelf for the
+            # interpreter fix in postFixup
+            nativeBuildInputs = [pkgs.protobuf pkgs.patchelf];
+
+            # The binary links libc dynamically (required for dlopen'ing auth
+            # modules), and zig emits the generic /lib64/ld-linux interpreter
+            # path, which doesn't exist on NixOS. Baking it in at link time
+            # is broken in zig 0.16 (--dynamic-linker leaks into the
+            # compiler_rt/glibc sub-compilations, which reject it — the
+            # reason zig2nix disabled its own handling), so patch the
+            # interpreter to the nix-store glibc after the fact. That ld.so
+            # resolves libc.so.6 from its own glibc, so no rpath is needed.
+            # Note patchelf can only rewrite lld's ELF layout (it asserts on
+            # the self-hosted backend's) — release builds use LLVM/lld by
+            # default, so don't build this package with -Dllvm=false.
+            postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+              patchelf --set-interpreter ${pkgs.stdenv.cc.bintools.dynamicLinker} $out/bin/winnow
+            '';
 
             # Generate protobuf Zig code and embed frontend assets before the main build.
             # This creates static_assets.zig so zig build's auto-detect skips frontend steps.

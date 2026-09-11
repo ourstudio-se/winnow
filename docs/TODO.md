@@ -165,6 +165,11 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [x] Connection policy: one request per connection, announced via `connection: close` (forced centrally by `request.head.keep_alive = false` in worker.zig). Keep-alive was tried and reverted: idle timeouts are required to protect the fixed worker pool, but SO_RCVTIMEO panics Io.Threaded (EAGAIN = checked illegal state in netReadPosix) and poll-based timeouts added more complexity than the feature is worth here. `std.http.Client` honors the close announcement (marks connection closing, no pooling), so the proxy's shared client is safe.
 - [x] Verify: split-node dev config (api:8080 + ui:3020 + collector:9999) — ui-config served on ui node (200, string URLs), three successive `/api/v1/traces/search` POSTs proxied ui→api all returned 401 (cookie auth, no cookie) with no WriteFailed; responses carry `connection: close`
 
+## Fix: nix-built binary unrunnable on NixOS (dynamic linking regression)
+
+- [x] Since `link_libc = true` (auth modules), zig emitted the generic `/lib64/ld-linux` interpreter → NixOS "Could not start dynamically linked executable". Fixed in flake.nix: build with `-Dllvm=true` (lld ELF layout; patchelf asserts on the self-hosted backend's layout) + `postFixup` patchelf to the nix-store glibc interpreter. Link-time `-Ddynamic-linker` is broken in zig 0.16 (leaks into compiler_rt/glibc sub-compilations) — same reason zig2nix disables it.
+- [x] Verify: auth module dlopen + on_auth work against the nix-built binary — sample module loads, all hooks register, JWKS fetched; proxied search via ui node: 401 without cookie, 200 with a valid dev JWT cookie
+
 ## Stable API Endpoints (replace dynamic index routing)
 
 - [x] Rewrite `api.zig` — fixed routes `/api/v1/{traces,logs}/{search,metadata}`, remove `isAllowedIndex`, `extractSearchIndex`, `extractMetadataIndex`, `handleIndexList`
