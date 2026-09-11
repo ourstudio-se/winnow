@@ -25,6 +25,7 @@ pub fn proxy(
 
     var ureq = try client.request(req.head.method, uri, .{
         .extra_headers = headers.items,
+        .keep_alive = false,
     });
     defer ureq.deinit();
 
