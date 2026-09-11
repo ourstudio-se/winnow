@@ -57,6 +57,10 @@
           })
           (builtins.fromJSON (builtins.readFile ./backend/build.zig.zon2json-lock)));
 
+        safe-curl = pkgs.curl.override {
+          scpSupport = false;
+        };
+
         # nixpkgs still ships libjwt 1.x; the sample module needs the 3.x API.
         libjwt3 = pkgs.stdenv.mkDerivation (finalAttrs: {
           pname = "libjwt";
@@ -70,7 +74,7 @@
           };
 
           nativeBuildInputs = [pkgs.cmake pkgs.pkg-config];
-          buildInputs = [pkgs.jansson pkgs.openssl pkgs.curl];
+          buildInputs = [pkgs.jansson pkgs.openssl safe-curl];
 
           cmakeFlags = [
             "-DWITH_GNUTLS=OFF" # auto-detected otherwise; keep the closure deterministic
@@ -178,7 +182,7 @@
             # Tools
             protobuf
             grpcurl
-            curl
+            safe-curl
             jq
 
             # Sample module dependencies
