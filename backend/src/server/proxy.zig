@@ -1,14 +1,11 @@
 const std = @import("std");
 
 pub fn proxy(
-    io: std.Io,
+    client: *std.http.Client,
     allocator: std.mem.Allocator,
     req: *std.http.Server.Request,
     upstream: std.Uri,
 ) !void {
-    var client: std.http.Client = .{ .allocator = allocator, .io = io };
-    defer client.deinit();
-
     var headers: std.ArrayList(std.http.Header) = .empty;
     defer headers.deinit(allocator);
 
@@ -17,7 +14,8 @@ pub fn proxy(
         if (std.ascii.eqlIgnoreCase(h.name, "host") or
             std.ascii.eqlIgnoreCase(h.name, "connection") or
             std.ascii.eqlIgnoreCase(h.name, "transfer-encoding") or
-            std.ascii.eqlIgnoreCase(h.name, "expect"))
+            std.ascii.eqlIgnoreCase(h.name, "expect") or
+            std.ascii.eqlIgnoreCase(h.name, "content-length"))
             continue;
         try headers.append(allocator, h);
     }
@@ -33,7 +31,10 @@ pub fn proxy(
     // Preserve the incoming request's framing.
     ureq.transfer_encoding = switch (req.head.transfer_encoding) {
         .chunked => .chunked,
-        .none => .none,
+        .none => if (req.head.content_length) |len|
+            .{ .content_length = len }
+        else
+            .none,
     };
 
     var in_buf: [16 * 1024]u8 = undefined;
@@ -56,8 +57,15 @@ pub fn proxy(
     defer response_headers.deinit(allocator);
 
     var rh = response.head.iterateHeaders();
-    while (rh.next()) |h|
+    while (rh.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "host") or
+            std.ascii.eqlIgnoreCase(h.name, "connection") or
+            std.ascii.eqlIgnoreCase(h.name, "transfer-encoding") or
+            std.ascii.eqlIgnoreCase(h.name, "expect") or
+            std.ascii.eqlIgnoreCase(h.name, "content-length"))
+            continue;
         try response_headers.append(allocator, h);
+    }
 
     var out_buf: [16 * 1024]u8 = undefined;
     var out = try req.respondStreaming(&out_buf, .{
