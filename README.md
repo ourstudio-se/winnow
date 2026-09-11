@@ -45,7 +45,7 @@ nix build
 ./result/bin/winnow
 ```
 
-By default the API listens on port 8080 and the collector on port 4318. Quickwit is expected at `http://localhost:7280`. Configure via environment variables:
+By default the API and UI listen on port 8080 and the collector on port 4318. Quickwit is expected at `http://localhost:7280`. Configure via environment variables:
 
 ```
 QUICKWIT_URL=http://quickwit.example.com:7280 ./result/bin/winnow
@@ -88,41 +88,92 @@ Pass with `--config`:
 
 If no `--config` is given, the server looks for `./winnow.kdl` in the working directory. If no file is found, bare defaults are used.
 
-**Serve section** (optional):
+**Serve blocks** (optional):
 
-The `serve` block controls which components run and on which ports. By default (no `serve` block), both the collector (port 4318) and API (port 8080) are enabled.
+Each `serve` block defines one HTTP listener and the roles it runs. There are three roles:
 
-```kdl
-// Explicit ports (these are the defaults)
-serve {
-    collector http_port=4318
-    api http_port=8080
-}
-```
+- `api` — the query API the frontend talks to (`/api/v1/...`)
+- `ui` — serves the embedded frontend assets and the UI bootstrap config
+- `collector` — the OTLP ingest endpoints (`/v1/traces`, `/v1/logs`, `/v1/metrics`)
 
-Each component also accepts `number_of_workers` (default: 6) to control the number of HTTP worker threads.
-
-This is useful for production deployments where you want to scale the collector (high-throughput ingest) and API (user-facing queries) independently as separate processes.
+By default (no `serve` block), api + ui run on port 8080 and the collector on port 4318:
 
 ```kdl
-// Collector-only instance
-serve {
-    collector http_port=4318
-}
-
-// API-only instance
-serve {
-    api http_port=8080
-}
-
-// Both on default ports
-serve {
-    collector
+// Equivalent to the defaults
+serve http_port=8080 {
     api
+    ui
+}
+serve http_port=4318 {
+    collector
 }
 ```
 
-When a component is disabled, its routes return 404. A `serve` block with no children is an error.
+A `serve` block accepts `http_port` and `number_of_workers` (HTTP worker threads, default: 6) as properties. Roles a listener doesn't declare return 404 on that port. A `serve` block with no roles is an error, and two `serve` blocks on the same port are an error.
+
+Roles can be split across ports — or across separate processes, each running with a config that declares only its own roles — to scale ingest (collector) and user-facing queries (api/ui) independently.
+
+**UI role parameters:**
+
+The `ui` role takes optional child nodes:
+
+```kdl
+serve http_port=3020 {
+    ui {
+        login_url "https://idp.example.com/login?return_to={winnow_return_url}"
+        logout_url "https://idp.example.com/logout"
+        api_url "http://api-node.internal:8080"
+    }
+}
+```
+
+- `login_url` / `logout_url` — exposed to the frontend via the unauthenticated `GET /api/v1/ui-config` endpoint. When an API request is rejected with 401, the frontend redirects to `login_url`; a logout button appears when `logout_url` is set. Both may contain a `{winnow_return_url}` placeholder, which the frontend substitutes with the current page URL so the login flow can return the user to where they were.
+- `api_url` — when set, the ui node reverse-proxies all `/api/*` requests (except `ui-config` itself) to this base URL. This is how a split deployment works: the browser only ever talks to the ui node's origin (no CORS involved), and the ui node forwards API traffic to the api node.
+
+**Auth blocks:**
+
+Authorization is opt-in per role. Define a named `auth` block and attach it to a role with the `auth` property:
+
+```kdl
+serve http_port=8080 {
+    api auth="my-auth"
+}
+
+auth name="my-auth" {
+    strategy "cookie"      // "cookie" or "bearer"
+    cookie_name "jwt"      // required for the cookie strategy
+
+    config kind="module" {
+        module "my-module"
+    }
+}
+```
+
+The `strategy` decides where the credential comes from: `bearer` reads the `Authorization: Bearer ...` header, `cookie` reads the named cookie. The credential is then passed to an auth module (the only supported `config kind` today), whose verdict maps to the response: `unauthenticated` → 401 (the frontend redirects to `login_url`), `unauthorized` → 403 (the frontend shows a forbidden page), errors → 500.
+
+Note: the `ui` role's `GET /api/v1/ui-config` endpoint is how a logged-out frontend learns the login URL — don't put an `auth` gate on the ui node, or the login flow can never bootstrap. Gate the api role instead.
+
+**Module blocks:**
+
+Modules are shared libraries loaded at startup, referenced by name from auth blocks:
+
+```kdl
+module name="my-module" {
+    dll "/path/to/libmy-module.so"
+    config {
+        jwks_issuer_url "https://idp.example.com"
+    }
+}
+```
+
+- `dll` — path to the shared library.
+- `config` — arbitrary string key/value pairs passed to the module on init.
+
+A module exports C ABI hooks, all optional: `on_module_init` (receives the config pairs), `on_module_deinit`, and `on_auth` (receives the credential extracted by the strategy and decides accept/reject). A sample module implementing JWT verification against a JWKS endpoint lives in `backend/sample_module/`.
+
+**Connection handling:**
+
+The server handles one request per connection and announces `connection: close` on every response — clients must not attempt connection reuse. This is a deliberate simplification; for an internal observability tool the per-request handshake cost is negligible.
 
 **Environment variables** (override config file values):
 
@@ -134,6 +185,8 @@ WINNOW_EDGES_INDEX      Quickwit index for service edges (default: winnow-edges-
 ```
 
 **Startup behavior:**
+
+Index management runs when the config declares an `api` or `collector` role (including via the defaults). A ui-only node never touches Quickwit.
 
 - If an index doesn't exist, the server creates it (with retention policy if configured).
 - If an index already exists, the server validates its schema against the expected field mappings. On a mismatch (wrong field type, missing field, wrong tokenizer) the server exits with an error. Retention mismatches produce a warning but don't prevent startup.
