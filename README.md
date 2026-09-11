@@ -171,10 +171,6 @@ module name="my-module" {
 
 A module exports C ABI hooks, all optional: `on_module_init` (receives the config pairs), `on_module_deinit`, and `on_auth` (receives the credential extracted by the strategy and decides accept/reject). A sample module implementing JWT verification against a JWKS endpoint lives in `backend/sample_module/`.
 
-**Connection handling:**
-
-The server handles one request per connection and announces `connection: close` on every response — clients must not attempt connection reuse. This is a deliberate simplification; for an internal observability tool the per-request handshake cost is negligible.
-
 **Environment variables** (override config file values):
 
 ```
