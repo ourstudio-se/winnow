@@ -105,7 +105,9 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
     exe_mod.addImport("kdl", kdl_dep.module("kdl"));
 
-    const use_llvm = b.option(bool, "llvm", "Force the LLVM backend") orelse false;
+    // null = compiler default: self-hosted backend for Debug (fast builds),
+    // LLVM for release modes (better codegen, conventional ELF layout).
+    const use_llvm = b.option(bool, "llvm", "Override the backend choice (default: LLVM for release, self-hosted for Debug)");
 
     const exe = b.addExecutable(.{
         .name = "winnow",
