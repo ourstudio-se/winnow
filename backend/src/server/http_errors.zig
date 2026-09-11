@@ -50,7 +50,7 @@ pub fn sendMethodNotAllowed(request: *std.http.Server.Request, allowed_methods: 
     var buf: [8192]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
     for (allowed_methods, 0..) |allowed_method, i| {
-        writer.print("{s}{s}", .{ if (i == 0) ", " else "", @tagName(allowed_method) }) catch |err| {
+        writer.print("{s}{s}", .{ if (i != 0) ", " else "", @tagName(allowed_method) }) catch |err| {
             log.err("writing Allow header: {}", .{err});
         };
     }
