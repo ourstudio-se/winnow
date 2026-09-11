@@ -120,32 +120,24 @@ pub fn close(server: *Server) void {
 
 pub fn listen(server: *Server) !net.Server {
     {
-        // Log what we are doing
-        var roleAl = try std.ArrayList(u8).initCapacity(server.allocator, 255);
-        defer roleAl.deinit(server.allocator);
+        var role_str_buf: [8192]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&role_str_buf);
 
         if (server.roles.api != null) {
-            try roleAl.appendSlice(server.allocator, "api");
+            _ = try writer.write("api");
         }
 
         if (server.roles.collector != null) {
-            if (roleAl.items.len > 0) {
-                try roleAl.appendSlice(server.allocator, " + ");
-            }
-            try roleAl.appendSlice(server.allocator, "collector");
+            _ = try writer.print("{s}collector", .{if (writer.end == 0) "" else " + "});
         }
 
         if (server.roles.ui != null) {
-            if (roleAl.items.len > 0) {
-                try roleAl.appendSlice(server.allocator, " + ");
-            }
-            try roleAl.appendSlice(server.allocator, "ui");
+            _ = try writer.print("{s}ui", .{if (writer.end == 0) "" else " + "});
         }
 
-        const rolestr = try roleAl.toOwnedSlice(server.allocator);
-        defer server.allocator.free(rolestr);
+        const role_str = role_str_buf[0..writer.end];
 
-        log.info("{s} listening on http://0.0.0.0:{d}", .{ rolestr, server.opts.port });
+        log.info("{s} listening on http://0.0.0.0:{d}", .{ role_str, server.opts.port });
     }
 
     const address = net.IpAddress.parse("0.0.0.0", server.opts.port) catch unreachable;
