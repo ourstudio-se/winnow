@@ -581,7 +581,13 @@ fn parseKdlServeNode(provider: *ConfigProvider, doc: *const kdl.Document, node: 
         return Error.ConfigParseError;
     }
 
-    try provider.config.serve.put(provider.allocator, serve.http_port, serve);
+    const serve_gop = try provider.config.serve.getOrPut(provider.allocator, serve.http_port);
+    if (serve_gop.found_existing) {
+        log.err("a serve block was already defined for port {d}", .{serve.http_port});
+        return Error.ConfigParseError;
+    }
+
+    serve_gop.value_ptr.* = serve;
 }
 
 fn parseKdlServeRoleNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle, roles: *ServeConfig.Roles) Error!void {
