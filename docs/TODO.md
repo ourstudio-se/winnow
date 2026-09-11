@@ -157,12 +157,10 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 
 ## API/UI Serve-Node Split (feat/better-port-sharing-config)
 
-- [x] Backend: `api_url` param on the ui role config, exposed via `/api/v1/ui-config` (`handleUiConfig`)
-- [x] Frontend: `api_url` added to `UiConfig` in `lib/config.ts`
-- [x] Frontend: `apiFetch()` helper in `lib/api.ts` — prefixes all API requests (search, metadata, service-graph) with `api_url` when set, with `credentials: "include"` so the auth cookie travels cross-origin; falls back to frontend-origin relative paths when null. `/api/v1/ui-config` itself stays on the frontend origin (served by the ui role).
-- [ ] Backend CORS: when api and ui are on different origins, the api node must answer preflights and send `Access-Control-Allow-Origin: <ui origin>` + `Access-Control-Allow-Credentials: true` — nothing in the backend does this yet, so cross-origin api_url won't work in browsers until added
-- [ ] Fix `config.zig` tests (lines ~756–876): still reference `defaults.serve.collector`, but `serve` is now a port-keyed HashMap — `zig build test` fails to compile
-- [ ] Verify: run ui and api roles on separate ports with `api_url` set, confirm the UI hits the api port
+- [x] Backend: `api_url` param on the ui role config; ui role proxies `/api/*` requests to it (`server/proxy.zig`), so the frontend always talks to its own origin — no CORS needed
+- [x] Frontend: reverted the earlier `api_url`-injection approach (`apiFetch()` in `lib/api.ts`, `api_url` in `lib/config.ts`) — superseded by the ui→api proxy; all fetches are origin-relative again
+- [ ] `zig build test`: all 61 tests pass, but the run exits 1 because `parseKdl serve block with no children is error` triggers `log.err("serve node must have at least one role")` and the test runner fails on error-level logs (masked by the zig test cache on unchanged trees — force a rerun to reproduce)
+- [ ] Verify: run ui and api roles on separate ports with `api_url` set, confirm requests proxy through the ui node to the api node
 
 ## Stable API Endpoints (replace dynamic index routing)
 
