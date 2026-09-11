@@ -74,9 +74,11 @@ pub const ServeConfig = struct {
         pub const APIInner = struct {};
         pub const CollectorInner = struct {};
         pub const UIInner = struct {
-            login_url: ?[]const u8 = null,
-            logout_url: ?[]const u8 = null,
-            api_url: ?[]const u8 = null,
+            login_url: ?std.Uri = null,
+            login_url_str: ?[]const u8 = null,
+            logout_url: ?std.Uri = null,
+            logout_url_str: ?[]const u8 = null,
+            api_url: ?std.Uri = null,
         };
 
         pub const Inner = union(RoleType) {
@@ -344,8 +346,6 @@ fn parseKdlAuthModuleConfigNode(_: *ConfigProvider, doc: *const kdl.Document, no
 
 fn parseKdlAuthNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
     const childNodeType = enum {
-        login_url,
-        logout_url,
         config,
         strategy,
         cookie_name,
@@ -355,8 +355,6 @@ fn parseKdlAuthNode(provider: *ConfigProvider, doc: *const kdl.Document, node: k
         return Error.ConfigParseError;
     };
 
-    var login_url: ?[]const u8 = null;
-    var logout_url: ?[]const u8 = null;
     var strategy_type: ?AuthConfig.StrategyType = null;
     var inner_config: ?AuthConfig.InnerConfig = null;
     var cookie_name: ?[]const u8 = null;
@@ -369,16 +367,6 @@ fn parseKdlAuthNode(provider: *ConfigProvider, doc: *const kdl.Document, node: k
         };
 
         switch (node_type) {
-            .login_url => {
-                login_url = getStringArg(doc, child, 0) orelse {
-                    return Error.ConfigParseError;
-                };
-            },
-            .logout_url => {
-                logout_url = getStringArg(doc, child, 0) orelse {
-                    return Error.ConfigParseError;
-                };
-            },
             .config => {
                 try provider.parseKdlAuthInnerConfigNode(doc, child, &inner_config);
             },
@@ -641,7 +629,10 @@ fn parseKdlServeRoleNode(provider: *ConfigProvider, doc: *const kdl.Document, no
                 switch (child_type) {
                     .api_url => {
                         if (getStringArg(doc, child, 0)) |value| {
-                            ui_role_config.inner.ui.api_url = value;
+                            ui_role_config.inner.ui.api_url = std.Uri.parse(value) catch |err| {
+                                log.err("parsing api_url: {}", .{err});
+                                return Error.ConfigParseError;
+                            };
                         } else {
                             log.err("Missing argument value for role option {s}.{s}", .{ @tagName(node_type), @tagName(child_type) });
                             return Error.ConfigParseError;
@@ -649,7 +640,11 @@ fn parseKdlServeRoleNode(provider: *ConfigProvider, doc: *const kdl.Document, no
                     },
                     .login_url => {
                         if (getStringArg(doc, child, 0)) |value| {
-                            ui_role_config.inner.ui.login_url = value;
+                            ui_role_config.inner.ui.login_url_str = value;
+                            ui_role_config.inner.ui.login_url = std.Uri.parse(value) catch |err| {
+                                log.err("parsing login_url: {}", .{err});
+                                return Error.ConfigParseError;
+                            };
                         } else {
                             log.err("Missing argument value for role option {s}.{s}", .{ @tagName(node_type), @tagName(child_type) });
                             return Error.ConfigParseError;
@@ -657,7 +652,11 @@ fn parseKdlServeRoleNode(provider: *ConfigProvider, doc: *const kdl.Document, no
                     },
                     .logout_url => {
                         if (getStringArg(doc, child, 0)) |value| {
-                            ui_role_config.inner.ui.logout_url = value;
+                            ui_role_config.inner.ui.logout_url_str = value;
+                            ui_role_config.inner.ui.logout_url = std.Uri.parse(value) catch |err| {
+                                log.err("parsing logout_url: {}", .{err});
+                                return Error.ConfigParseError;
+                            };
                         } else {
                             log.err("Missing argument value for role option {s}.{s}", .{ @tagName(node_type), @tagName(child_type) });
                             return Error.ConfigParseError;

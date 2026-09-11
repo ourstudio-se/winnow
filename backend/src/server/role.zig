@@ -104,8 +104,8 @@ pub const UIRole = struct {
                 api.handleUiConfig(
                     req,
                     ctx.arena,
-                    ui_role.config.login_url,
-                    ui_role.config.logout_url,
+                    ui_role.config.login_url_str,
+                    ui_role.config.logout_url_str,
                 ) catch |err| {
                     log.err("ui-config error: {}", .{err});
                 };
@@ -113,12 +113,7 @@ pub const UIRole = struct {
             .@"*" => {
                 if (std.mem.startsWith(u8, req.head.target, "/api/")) {
                     if (ui_role.config.api_url) |api_url| {
-                        const api_uri = std.Uri.parse(api_url) catch |err| {
-                            log.err("parsing api url: {}", .{err});
-                            return http_errors.sendInternalServerError(req);
-                        };
-
-                        proxy.proxy(worker.server.io, ctx.arena, req, api_uri) catch |err| {
+                        proxy.proxy(worker.server.io, ctx.arena, req, api_url) catch |err| {
                             log.err("proxying request: {}", .{err});
                         };
                     } else {

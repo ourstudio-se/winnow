@@ -3,6 +3,7 @@ const http = std.http;
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Quickwit = @import("quickwit.zig").Quickwit;
+const http_errors = @import("server/http_errors.zig");
 
 const log = std.log.scoped(.api);
 
