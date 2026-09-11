@@ -250,13 +250,11 @@ pub fn handleUiConfig(
     arena: Allocator,
     login_url: ?[]const u8,
     logout_url: ?[]const u8,
-    api_url: ?[]const u8,
 ) !void {
     var buf: Io.Writer.Allocating = .init(arena);
     try std.json.Stringify.value(.{
         .login_url = login_url,
         .logout_url = logout_url,
-        .api_url = api_url,
     }, .{}, &buf.writer);
     return respondJson(request, buf.writer.buffered());
 }

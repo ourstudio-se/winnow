@@ -3,9 +3,14 @@ import { useEffect, useState } from "react";
 export interface UiConfig {
   login_url: string | null;
   logout_url: string | null;
+  api_url: string | null;
 }
 
-const emptyConfig: UiConfig = { login_url: null, logout_url: null };
+const emptyConfig: UiConfig = {
+  login_url: null,
+  logout_url: null,
+  api_url: null,
+};
 
 let configPromise: Promise<UiConfig> | null = null;
 

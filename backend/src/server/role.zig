@@ -4,6 +4,7 @@ const api = @import("../api.zig");
 const auth = @import("auth.zig");
 const http_errors = @import("http_errors.zig");
 const ingest = @import("../ingest.zig");
+const proxy = @import("proxy.zig");
 const quickwit = @import("../quickwit.zig");
 const static = @import("static.zig");
 const std = @import("std");
@@ -14,8 +15,7 @@ pub const RouteFn = *const fn (
     *const anyopaque,
     *Worker,
     *std.http.Server.Request,
-    quickwit.Quickwit,
-    std.mem.Allocator,
+    Worker.Context,
 ) void;
 pub const DestroyFn = *const fn (*const anyopaque, std.mem.Allocator) void;
 
@@ -40,10 +40,9 @@ pub fn route(
     role: Role,
     worker: *Worker,
     req: *std.http.Server.Request,
-    qw: quickwit.Quickwit,
-    allocator: std.mem.Allocator,
+    ctx: Worker.Context,
 ) void {
-    return role.vtable.route(role.user_data, worker, req, qw, allocator);
+    return role.vtable.route(role.user_data, worker, req, ctx);
 }
 
 pub fn destroy(role: Role, allocator: std.mem.Allocator) void {
@@ -83,16 +82,10 @@ pub const UIRole = struct {
 
     pub fn route(
         user_data: *const anyopaque,
-        _: *Worker,
+        worker: *Worker,
         req: *std.http.Server.Request,
-        _: quickwit.Quickwit,
-        arena: std.mem.Allocator,
+        ctx: Worker.Context,
     ) void {
-        if (!requireHttpMethod(req, .GET)) {
-            http_errors.sendNotFound(req);
-            return;
-        }
-
         const ui_role: *const @This() = @ptrCast(@alignCast(user_data));
 
         const pathType = enum {
@@ -104,20 +97,43 @@ pub const UIRole = struct {
 
         switch (path) {
             .@"/api/v1/ui-config" => {
+                if (!requireHttpMethod(req, &.{.GET})) {
+                    return;
+                }
+
                 api.handleUiConfig(
                     req,
-                    arena,
+                    ctx.arena,
                     ui_role.config.login_url,
                     ui_role.config.logout_url,
-                    ui_role.config.api_url,
                 ) catch |err| {
                     log.err("ui-config error: {}", .{err});
                 };
             },
             .@"*" => {
-                static.handleStatic(req) catch |err| {
-                    log.err("static error: {}", .{err});
-                };
+                if (std.mem.startsWith(u8, req.head.target, "/api/")) {
+                    if (ui_role.config.api_url) |api_url| {
+                        const api_uri = std.Uri.parse(api_url) catch |err| {
+                            log.err("parsing api url: {}", .{err});
+                            return http_errors.sendInternalServerError(req);
+                        };
+
+                        proxy.proxy(worker.server.io, ctx.arena, req, api_uri) catch |err| {
+                            log.err("proxying request: {}", .{err});
+                        };
+                    } else {
+                        return http_errors.sendNotFound(req);
+                    }
+                } else {
+                    if (!requireHttpMethod(req, &.{.GET})) {
+                        http_errors.sendNotFound(req);
+                        return;
+                    }
+
+                    static.handleStatic(req) catch |err| {
+                        log.err("static error: {}", .{err});
+                    };
+                }
             },
         }
     }
@@ -155,10 +171,9 @@ pub const ApiRole = GenericRole(struct {
         _: *const anyopaque,
         worker: *Worker,
         req: *std.http.Server.Request,
-        qw: quickwit.Quickwit,
-        arena: std.mem.Allocator,
+        ctx: Worker.Context,
     ) void {
-        api.handleApi(req, arena, qw, &worker.server.opts.indices) catch |err| {
+        api.handleApi(req, ctx.arena, ctx.qw, &worker.server.opts.indices) catch |err| {
             log.err("api error: {}", .{err});
         };
     }
@@ -171,10 +186,9 @@ pub const CollectorRole = GenericRole(struct {
         _: *const anyopaque,
         worker: *Worker,
         req: *std.http.Server.Request,
-        qw: quickwit.Quickwit,
-        arena: std.mem.Allocator,
+        ctx: Worker.Context,
     ) void {
-        if (!requireHttpMethod(req, .POST)) {
+        if (!requireHttpMethod(req, &.{.POST})) {
             http_errors.sendNotFound(req);
             return;
         }
@@ -189,17 +203,17 @@ pub const CollectorRole = GenericRole(struct {
 
         switch (path) {
             .@"/v1/traces" => {
-                ingest.handleTraces(req, arena, qw, worker.server.opts.indices.traces) catch |err| {
+                ingest.handleTraces(req, ctx.arena, ctx.qw, worker.server.opts.indices.traces) catch |err| {
                     log.err("ingest error: {}", .{err});
                 };
             },
             .@"/v1/logs" => {
-                ingest.handleLogs(req, arena, qw, worker.server.opts.indices.logs) catch |err| {
+                ingest.handleLogs(req, ctx.arena, ctx.qw, worker.server.opts.indices.logs) catch |err| {
                     log.err("log ingest error: {}", .{err});
                 };
             },
             .@"/v1/metrics" => {
-                ingest.handleMetrics(req, arena, qw, worker.server.opts.indices.edges) catch |err| {
+                ingest.handleMetrics(req, ctx.arena, ctx.qw, worker.server.opts.indices.edges) catch |err| {
                     log.err("metrics ingest error: {}", .{err});
                 };
             },
@@ -207,10 +221,12 @@ pub const CollectorRole = GenericRole(struct {
     }
 });
 
-fn requireHttpMethod(request: *std.http.Server.Request, method: std.http.Method) bool {
-    if (request.head.method == method) {
-        return true;
+fn requireHttpMethod(request: *std.http.Server.Request, methods: []const std.http.Method) bool {
+    for (methods) |method| {
+        if (request.head.method == method) {
+            return true;
+        }
     }
-    http_errors.sendMethodNotAllowed(request, method);
+    http_errors.sendMethodNotAllowed(request, methods);
     return false;
 }

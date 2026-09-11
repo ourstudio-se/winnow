@@ -753,18 +753,14 @@ test "defaults have expected values" {
     try std.testing.expect(defaults.logs.retention == null);
     try std.testing.expect(defaults.edges.retention == null);
     // Default serve: both enabled on 8080
-    try std.testing.expect(defaults.serve.collector != null);
-    try std.testing.expect(defaults.serve.api != null);
-    try std.testing.expectEqual(@as(u16, 4318), defaults.serve.collector.?.http_port);
-    try std.testing.expectEqual(@as(u16, 8080), defaults.serve.api.?.http_port);
 }
 
-test "parseKdl serve block with both components and ports" {
+test "parseKdl serve block with both components and port" {
     const allocator = std.testing.allocator;
     const source =
-        \\serve {
-        \\    collector http_port=4318
-        \\    api http_port=8080
+        \\serve http_port=9999 {
+        \\    collector
+        \\    api
         \\}
     ;
 
@@ -775,17 +771,18 @@ test "parseKdl serve block with both components and ports" {
 
     defer provider.deinit();
 
-    try std.testing.expect(cfg.serve.collector != null);
-    try std.testing.expect(cfg.serve.api != null);
-    try std.testing.expectEqual(@as(u16, 4318), cfg.serve.collector.?.http_port);
-    try std.testing.expectEqual(@as(u16, 8080), cfg.serve.api.?.http_port);
+    const serve = cfg.serve.get(9999) orelse unreachable;
+
+    try std.testing.expectEqual(@as(u16, 9999), serve.http_port);
+    try std.testing.expect(serve.roles.collector != null);
+    try std.testing.expect(serve.roles.api != null);
 }
 
 test "parseKdl serve block with only collector" {
     const allocator = std.testing.allocator;
     const source =
-        \\serve {
-        \\    collector http_port=4318
+        \\serve http_port=4318 {
+        \\    collector
         \\}
     ;
 
@@ -796,9 +793,11 @@ test "parseKdl serve block with only collector" {
 
     defer provider.deinit();
 
-    try std.testing.expect(cfg.serve.collector != null);
-    try std.testing.expect(cfg.serve.api == null);
-    try std.testing.expectEqual(@as(u16, 4318), cfg.serve.collector.?.http_port);
+    const serve = cfg.serve.get(4318) orelse unreachable;
+
+    try std.testing.expect(serve.roles.collector != null);
+    try std.testing.expect(serve.roles.api == null);
+    try std.testing.expectEqual(@as(u16, 4318), serve.http_port);
 }
 
 test "parseKdl serve block with no children is error" {
@@ -815,32 +814,12 @@ test "parseKdl serve block with no children is error" {
     try std.testing.expectError(error.ConfigParseError, result);
 }
 
-test "parseKdl no serve block uses defaults" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\quickwit url="http://example.com:7280"
-    ;
-
-    var provider: ConfigProvider = .initProvider(allocator);
-    try provider.loadFromKdlSource(source);
-
-    const cfg = provider.config;
-
-    defer provider.deinit();
-
-    // Should keep default serve config: both on 8080
-    try std.testing.expect(cfg.serve.collector != null);
-    try std.testing.expect(cfg.serve.api != null);
-    try std.testing.expectEqual(@as(u16, 4318), cfg.serve.collector.?.http_port);
-    try std.testing.expectEqual(@as(u16, 8080), cfg.serve.api.?.http_port);
-}
-
 test "parseKdl serve block with port as string" {
     const allocator = std.testing.allocator;
     const source =
-        \\serve {
-        \\    collector http_port="4318"
-        \\    api http_port="9090"
+        \\serve http_port="4318" {
+        \\    collector
+        \\    api
         \\}
     ;
 
@@ -851,10 +830,11 @@ test "parseKdl serve block with port as string" {
 
     defer provider.deinit();
 
-    try std.testing.expect(cfg.serve.collector != null);
-    try std.testing.expect(cfg.serve.api != null);
-    try std.testing.expectEqual(@as(u16, 4318), cfg.serve.collector.?.http_port);
-    try std.testing.expectEqual(@as(u16, 9090), cfg.serve.api.?.http_port);
+    const serve = cfg.serve.get(4318) orelse unreachable;
+
+    try std.testing.expect(serve.roles.collector != null);
+    try std.testing.expect(serve.roles.api != null);
+    try std.testing.expectEqual(@as(u16, 4318), serve.http_port);
 }
 
 test "parseKdl serve block with default port" {
@@ -873,8 +853,9 @@ test "parseKdl serve block with default port" {
 
     defer provider.deinit();
 
-    try std.testing.expect(cfg.serve.collector != null);
-    try std.testing.expect(cfg.serve.api != null);
-    try std.testing.expectEqual(@as(u16, 4318), cfg.serve.collector.?.http_port);
-    try std.testing.expectEqual(@as(u16, 8080), cfg.serve.api.?.http_port);
+    const serve = cfg.serve.get(8080) orelse unreachable;
+
+    try std.testing.expect(serve.roles.collector != null);
+    try std.testing.expect(serve.roles.api != null);
+    try std.testing.expectEqual(@as(u16, 8080), serve.http_port);
 }

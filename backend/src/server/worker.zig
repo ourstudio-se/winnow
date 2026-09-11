@@ -14,6 +14,12 @@ const log = std.log.scoped(.worker);
 
 const Worker = @This();
 
+pub const Context = struct {
+    arena: std.mem.Allocator,
+    http_client: std.http.Client,
+    qw: Quickwit,
+};
+
 // 8 KiB standard for buffered i/o on read/write. Used to assign static buffer sizes.
 // This does not limit the size of the request/response, it is a sliding window for
 // chunked TCP read/writes. It does effectively limit the HTTP header size to 8 KiB,
@@ -43,15 +49,21 @@ pub fn run(worker: *Worker) void {
     const client = HttpClient.init(&http_client);
     const qw = Quickwit.init(client, worker.server.opts.quickwit_url);
 
+    const ctx: Context = .{
+        .arena = arena.allocator(),
+        .http_client = http_client,
+        .qw = qw,
+    };
+
     while (worker.server.queue.pop(io)) |stream| {
         defer _ = arena.reset(.{ .retain_with_limit = arena_retain_size });
-        worker.handleConnection(arena.allocator(), stream, qw);
+        worker.handleConnection(stream, ctx);
     }
 
     std.log.debug("[THREAD {d}] Worker finished", .{std.Thread.getCurrentId()});
 }
 
-fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.net.Stream, qw: Quickwit) void {
+fn handleConnection(worker: *Worker, stream: std.Io.net.Stream, ctx: Context) void {
     const io = worker.server.io;
     defer stream.close(io);
 
@@ -80,7 +92,7 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.ne
     const req_role: Role = switch (path) {
         .@"/v1/traces", .@"/v1/logs", .@"/v1/metrics" => worker.server.roles.collector,
         .@"/api/v1/ui-config" => worker.server.roles.ui,
-        .@"*" => if (std.mem.startsWith(u8, request.head.target, "/api/")) worker.server.roles.api else worker.server.roles.ui,
+        .@"*" => if (std.mem.startsWith(u8, request.head.target, "/api/")) (worker.server.roles.api orelse worker.server.roles.ui) else worker.server.roles.ui,
     } orelse {
         return http_errors.sendNotFound(&request);
     };
@@ -89,5 +101,5 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.ne
         return;
     }
 
-    req_role.route(worker, &request, qw, arena);
+    req_role.route(worker, &request, ctx);
 }

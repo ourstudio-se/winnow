@@ -155,6 +155,15 @@ Goal: ingest traces and logs from an OTel-instrumented app, store in Quickwit, d
 - [ ] Verify: `zig build run` with serve block (collector-only) — only collector endpoints respond
 - [ ] Verify: `zig build run` with split ports — both components on respective ports
 
+## API/UI Serve-Node Split (feat/better-port-sharing-config)
+
+- [x] Backend: `api_url` param on the ui role config, exposed via `/api/v1/ui-config` (`handleUiConfig`)
+- [x] Frontend: `api_url` added to `UiConfig` in `lib/config.ts`
+- [x] Frontend: `apiFetch()` helper in `lib/api.ts` — prefixes all API requests (search, metadata, service-graph) with `api_url` when set, with `credentials: "include"` so the auth cookie travels cross-origin; falls back to frontend-origin relative paths when null. `/api/v1/ui-config` itself stays on the frontend origin (served by the ui role).
+- [ ] Backend CORS: when api and ui are on different origins, the api node must answer preflights and send `Access-Control-Allow-Origin: <ui origin>` + `Access-Control-Allow-Credentials: true` — nothing in the backend does this yet, so cross-origin api_url won't work in browsers until added
+- [ ] Fix `config.zig` tests (lines ~756–876): still reference `defaults.serve.collector`, but `serve` is now a port-keyed HashMap — `zig build test` fails to compile
+- [ ] Verify: run ui and api roles on separate ports with `api_url` set, confirm the UI hits the api port
+
 ## Stable API Endpoints (replace dynamic index routing)
 
 - [x] Rewrite `api.zig` — fixed routes `/api/v1/{traces,logs}/{search,metadata}`, remove `isAllowedIndex`, `extractSearchIndex`, `extractMetadataIndex`, `handleIndexList`

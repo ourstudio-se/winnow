@@ -3,6 +3,7 @@ import {
   redirectToLogin,
   signalForbidden,
 } from "@/lib/auth";
+import { getUiConfig } from "@/lib/config";
 
 export interface FieldMapping {
   name: string;
@@ -67,6 +68,24 @@ async function ensureOk(res: Response): Promise<Response> {
 }
 
 /**
+ * Fetch an API route. When ui-config carries an `api_url` (the api role is
+ * served from a different origin than the ui role), requests target that base
+ * instead of the frontend origin, with credentials included so the auth
+ * cookie travels cross-origin.
+ */
+async function apiFetch(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const { api_url } = await getUiConfig();
+  if (!api_url) return fetch(path, init);
+  return fetch(api_url.replace(/\/+$/, "") + path, {
+    ...init,
+    credentials: "include",
+  });
+}
+
+/**
  * Translate ES-style sort syntax ("-field" = descending, "field" = ascending)
  * to Quickwit's, which is inverted: a bare field sorts descending and a "-"
  * prefix means ascending. App code uses ES-style throughout.
@@ -88,7 +107,7 @@ async function searchIndex<T>(
   const body: SearchRequest = request.sort_by
     ? { ...request, sort_by: toQuickwitSortBy(request.sort_by) }
     : request;
-  const res = await fetch(`/api/v1/${category}/search`, {
+  const res = await apiFetch(`/api/v1/${category}/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -112,7 +131,7 @@ export async function searchLogs<T>(
 async function getMetadata(
   category: "traces" | "logs",
 ): Promise<IndexMetadataResponse> {
-  const res = await fetch(`/api/v1/${category}/metadata`);
+  const res = await apiFetch(`/api/v1/${category}/metadata`);
   await ensureOk(res);
   return res.json();
 }
@@ -134,7 +153,7 @@ export interface ServiceGraphResponse {
 export async function fetchServiceGraph(
   query: string,
 ): Promise<ServiceGraphResponse> {
-  const res = await fetch("/api/v1/service-graph", {
+  const res = await apiFetch("/api/v1/service-graph", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
