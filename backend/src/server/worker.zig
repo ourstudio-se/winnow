@@ -1,23 +1,18 @@
-const quickwit_mod = @import("../quickwit.zig");
 const HttpClient = quickwit_mod.HttpClient;
-const Quickwit = quickwit_mod.Quickwit;
-const Server = @import("server.zig");
 const Module = @import("module.zig");
+const Quickwit = quickwit_mod.Quickwit;
+const Role = @import("role.zig");
+const Server = @import("server.zig");
 const api = @import("../api.zig");
-const ingest = @import("../ingest.zig");
-const static = @import("static.zig");
 const http_errors = @import("http_errors.zig");
+const ingest = @import("../ingest.zig");
+const quickwit_mod = @import("../quickwit.zig");
+const static = @import("static.zig");
 const std = @import("std");
 
 const log = std.log.scoped(.worker);
 
 const Worker = @This();
-
-const RequestRole = enum {
-    api,
-    collector,
-    static,
-};
 
 // 8 KiB standard for buffered i/o on read/write. Used to assign static buffer sizes.
 // This does not limit the size of the request/response, it is a sliding window for
@@ -72,8 +67,6 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.ne
         return;
     };
 
-    // std.log.debug("request received - {s}, ctx: {}", .{ request.head.target, worker.server.opts.roles });
-
     const pathType = enum {
         @"/v1/traces",
         @"/v1/logs",
@@ -84,95 +77,17 @@ fn handleConnection(worker: *Worker, arena: std.mem.Allocator, stream: std.Io.ne
 
     const path = std.meta.stringToEnum(pathType, request.head.target) orelse .@"*";
 
-    const role = worker.server.opts.roles;
-
-    const req_role: RequestRole = switch (path) {
-        .@"/v1/traces", .@"/v1/logs", .@"/v1/metrics" => .collector,
-        // ui-config must be reachable while logged out (it carries the login
-        // URL), so it gets the static classification: api role, no auth.
-        .@"/api/v1/ui-config" => .static,
-        .@"*" => if (std.mem.startsWith(u8, request.head.target, "/api/")) .api else .static,
+    const req_role: Role = switch (path) {
+        .@"/v1/traces", .@"/v1/logs", .@"/v1/metrics" => worker.server.roles.collector,
+        .@"/api/v1/ui-config" => worker.server.roles.ui,
+        .@"*" => if (std.mem.startsWith(u8, request.head.target, "/api/")) worker.server.roles.api else worker.server.roles.ui,
+    } orelse {
+        return http_errors.sendNotFound(&request);
     };
 
-    // Preflight checks
-    switch (req_role) {
-        .collector => {
-            if (!role.collector) return http_errors.sendNotFound(&request);
-            if (worker.server.role_auth.collector) |auth| if (!auth.check(&request)) return;
-        },
-        .api => {
-            if (!role.api) return http_errors.sendNotFound(&request);
-            if (worker.server.role_auth.api) |auth| if (!auth.check(&request)) return;
-        },
-        .static => {
-            if (!role.api) return http_errors.sendNotFound(&request);
-        },
+    if (!req_role.preflight(&request)) {
+        return;
     }
 
-    switch (path) {
-        .@"/v1/traces" => {
-            if (!requireHttpMethod(&request, .POST)) {
-                return;
-            }
-            ingest.handleTraces(&request, arena, qw, worker.server.opts.indices.traces) catch |err| {
-                std.log.err("ingest error: {}", .{err});
-            };
-        },
-        .@"/v1/logs" => {
-            if (!requireHttpMethod(&request, .POST)) {
-                return;
-            }
-            ingest.handleLogs(&request, arena, qw, worker.server.opts.indices.logs) catch |err| {
-                std.log.err("log ingest error: {}", .{err});
-            };
-        },
-        .@"/v1/metrics" => {
-            if (!requireHttpMethod(&request, .POST)) {
-                return;
-            }
-            ingest.handleMetrics(&request, arena, qw, worker.server.opts.indices.edges) catch |err| {
-                std.log.err("metrics ingest error: {}", .{err});
-            };
-        },
-        .@"/api/v1/ui-config" => {
-            if (!requireHttpMethod(&request, .GET)) {
-                return;
-            }
-            const auth_cfg = worker.server.opts.authorizers.api;
-            api.handleUiConfig(
-                &request,
-                arena,
-                if (auth_cfg) |cfg| cfg.login_url else null,
-                if (auth_cfg) |cfg| cfg.logout_url else null,
-            ) catch |err| {
-                std.log.err("ui-config error: {}", .{err});
-            };
-        },
-        .@"*" => {
-            // "*" is not an actual path, just a wildcard catchall on the path type
-            if (std.mem.eql(u8, request.head.target, "*")) return http_errors.sendNotFound(&request);
-
-            switch (req_role) {
-                .api => {
-                    api.handleApi(&request, arena, qw, &worker.server.opts.indices) catch |err| {
-                        std.log.err("api error: {}", .{err});
-                    };
-                },
-                .static => {
-                    static.handleStatic(&request) catch |err| {
-                        std.log.err("static error: {}", .{err});
-                    };
-                },
-                .collector => unreachable,
-            }
-        },
-    }
-}
-
-fn requireHttpMethod(request: *std.http.Server.Request, method: std.http.Method) bool {
-    if (request.head.method == method) {
-        return true;
-    }
-    http_errors.sendMethodNotAllowed(request, method);
-    return false;
+    req_role.route(worker, &request, qw, arena);
 }

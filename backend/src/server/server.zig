@@ -1,6 +1,7 @@
 const ConfigProvider = @import("../config.zig");
 const Io = std.Io;
 const Module = @import("module.zig");
+const Role = @import("role.zig");
 const Worker = @import("worker.zig");
 const api = @import("../api.zig");
 const auth = @import("auth.zig");
@@ -15,6 +16,12 @@ const log = std.log.scoped(.server);
 const Error = error{
     AuthMissingModule,
     AuthModuleMissingHook,
+};
+
+pub const Roles = struct {
+    api: ?Role = null,
+    collector: ?Role = null,
+    ui: ?Role = null,
 };
 
 const RolesEnabled = packed struct {
@@ -35,21 +42,18 @@ const RoleAuthorizerConfig = struct {
 const Server = @This();
 
 const Opts = struct {
-    roles: RolesEnabled,
     number_of_workers: usize,
     port: u16,
     quickwit_url: []const u8,
     indices: api.IndexConfig,
-    authorizers: RoleAuthorizerConfig,
-    modules: *std.StringHashMapUnmanaged(Module),
 };
 
 allocator: std.mem.Allocator,
 io: Io,
 opts: Opts,
 queue: *tsq.ThreadSafeQueue(net.Stream),
+roles: Roles,
 workers: []Worker,
-role_auth: RoleAuth,
 
 pub fn init(
     allocator: std.mem.Allocator,
@@ -57,7 +61,7 @@ pub fn init(
     opts: Opts,
     queue: *tsq.ThreadSafeQueue(net.Stream),
     workers: []Worker,
-    role_auth: RoleAuth,
+    roles: Roles,
 ) Server {
     return Server{
         .allocator = allocator,
@@ -65,11 +69,11 @@ pub fn init(
         .opts = opts,
         .queue = queue,
         .workers = workers,
-        .role_auth = role_auth,
+        .roles = roles,
     };
 }
 
-pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts) (error{OutOfMemory} || Error)!*Server {
+pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts, roles: Roles) (error{OutOfMemory} || Error)!*Server {
     const server = try allocator.create(Server);
     errdefer allocator.destroy(server);
 
@@ -85,43 +89,7 @@ pub fn create(allocator: std.mem.Allocator, io: Io, opts: Opts) (error{OutOfMemo
         };
     }
 
-    // Set up server auth
-
-    var role_auth: RoleAuth = .{};
-    errdefer {
-        if (role_auth.api) |authorizer| authorizer.destroy(allocator);
-        if (role_auth.collector) |authorizer| authorizer.destroy(allocator);
-    }
-
-    if (opts.authorizers.api) |api_authorizer| {
-        switch (api_authorizer.inner_config) {
-            .module => |auth_module_cfg| {
-                const module = opts.modules.getPtr(auth_module_cfg.module_name) orelse {
-                    return Error.AuthMissingModule;
-                };
-                if (module.ffi.onAuth == null) {
-                    return Error.AuthModuleMissingHook;
-                }
-                role_auth.api = try module.getAuthorizer(api_authorizer.strategy, allocator);
-            },
-        }
-    }
-
-    if (opts.authorizers.collector) |collector_authorizer| {
-        switch (collector_authorizer.inner_config) {
-            .module => |auth_module_cfg| {
-                const module = opts.modules.getPtr(auth_module_cfg.module_name) orelse {
-                    return Error.AuthMissingModule;
-                };
-                if (module.ffi.onAuth == null) {
-                    return Error.AuthModuleMissingHook;
-                }
-                role_auth.collector = try module.getAuthorizer(collector_authorizer.strategy, allocator);
-            },
-        }
-    }
-
-    server.* = init(allocator, io, opts, queue, workers, role_auth);
+    server.* = init(allocator, io, opts, queue, workers, roles);
 
     return server;
 }
@@ -130,12 +98,16 @@ pub fn destroy(server: *Server) void {
     server.queue.destroy();
     server.allocator.free(server.workers);
 
-    if (server.role_auth.api) |authorizer| {
-        authorizer.destroy(server.allocator);
+    if (server.roles.api) |api_role| {
+        api_role.destroy(server.allocator);
     }
 
-    if (server.role_auth.collector) |authorizer| {
-        authorizer.destroy(server.allocator);
+    if (server.roles.collector) |collector_role| {
+        collector_role.destroy(server.allocator);
+    }
+
+    if (server.roles.ui) |ui_role| {
+        ui_role.destroy(server.allocator);
     }
 
     server.allocator.destroy(server);
@@ -152,15 +124,22 @@ pub fn listen(server: *Server) !net.Server {
         var roleAl = try std.ArrayList(u8).initCapacity(server.allocator, 255);
         defer roleAl.deinit(server.allocator);
 
-        if (server.opts.roles.api) {
+        if (server.roles.api != null) {
             try roleAl.appendSlice(server.allocator, "api");
         }
 
-        if (server.opts.roles.collector) {
+        if (server.roles.collector != null) {
             if (roleAl.items.len > 0) {
                 try roleAl.appendSlice(server.allocator, " + ");
             }
             try roleAl.appendSlice(server.allocator, "collector");
+        }
+
+        if (server.roles.ui != null) {
+            if (roleAl.items.len > 0) {
+                try roleAl.appendSlice(server.allocator, " + ");
+            }
+            try roleAl.appendSlice(server.allocator, "ui");
         }
 
         const rolestr = try roleAl.toOwnedSlice(server.allocator);
@@ -201,15 +180,15 @@ pub fn run(server: *Server) void {
 
         const connection_ready = std.posix.poll(&poll_fd, 100) catch |err| {
             log.err("polling error: {}", .{err});
-            continue :mainloop;
+            continue;
         } > 0;
 
         if (server.queue.closed.load(.acquire)) {
-            break :mainloop;
+            break;
         }
 
         if (!connection_ready) {
-            continue :mainloop;
+            continue;
         }
 
         const stream = listener.accept(io) catch |err| {

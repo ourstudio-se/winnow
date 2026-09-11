@@ -18,17 +18,6 @@ pub const IndexSettings = struct {
     retention: ?[]const u8 = null,
 };
 
-pub const ServeCollectorConfig = struct {
-    number_of_workers: usize = 6,
-    http_port: u16 = 4318,
-    authorizer: ?[]const u8 = null,
-};
-pub const ServeApiConfig = struct {
-    number_of_workers: usize = 6,
-    http_port: u16 = 8080,
-    authorizer: ?[]const u8 = null,
-};
-
 pub const ModuleConfig = struct {
     pub const Store = std.StringArrayHashMapUnmanaged([]const u8);
 
@@ -70,14 +59,44 @@ pub const AuthConfig = struct {
 
     strategy: Strategy,
     name: []const u8,
-    login_url: []const u8,
-    logout_url: []const u8,
     inner_config: InnerConfig,
 };
 
 pub const ServeConfig = struct {
-    collector: ?ServeCollectorConfig = .{},
-    api: ?ServeApiConfig = .{},
+    pub const RoleConfig = struct {
+        pub const RoleType = enum {
+            api,
+            collector,
+            ui,
+        };
+
+        pub const APIInner = struct {};
+        pub const CollectorInner = struct {};
+        pub const UIInner = struct {
+            login_url: ?[]const u8 = null,
+            logout_url: ?[]const u8 = null,
+            api_url: ?[]const u8 = null,
+        };
+
+        pub const Inner = union(RoleType) {
+            api: APIInner,
+            collector: CollectorInner,
+            ui: UIInner,
+        };
+
+        authorizer_name: ?[]const u8 = null,
+        inner: Inner,
+    };
+
+    pub const Roles = struct {
+        api: ?RoleConfig = null,
+        collector: ?RoleConfig = null,
+        ui: ?RoleConfig = null,
+    };
+
+    number_of_workers: usize = 6,
+    http_port: u16 = 8080,
+    roles: Roles = .{},
 };
 
 pub const Config = struct {
@@ -85,9 +104,10 @@ pub const Config = struct {
     traces: IndexSettings,
     logs: IndexSettings,
     edges: IndexSettings,
-    serve: ServeConfig = .{},
+    serve: std.AutoHashMapUnmanaged(u16, ServeConfig) = .{},
     modules: std.StringHashMapUnmanaged(ModuleConfig) = .{},
     auth: std.StringHashMapUnmanaged(AuthConfig) = .{},
+    ensure_indices: bool,
 };
 
 pub const ConfigProvider = @This();
@@ -101,10 +121,26 @@ pub const defaults = Config{
     .traces = .{ .index_id = "winnow-traces-v0_1" },
     .logs = .{ .index_id = "winnow-logs-v0_1" },
     .edges = .{ .index_id = "winnow-edges-v0_3" },
+    .ensure_indices = false,
+};
+
+pub const default_api_ui_config = ServeConfig{
+    .http_port = 8080,
+    .roles = .{
+        .api = .{ .inner = .{ .api = .{} } },
+        .ui = .{ .inner = .{ .ui = .{} } },
+    },
+};
+pub const default_collector_config = ServeConfig{
+    .http_port = 4318,
+    .roles = .{
+        .collector = .{ .inner = .{ .collector = .{} } },
+    },
 };
 
 /// Get an integer property value from a KDL node.
 pub fn deinit(provider: *ConfigProvider) void {
+    provider.config.serve.deinit(provider.allocator);
     provider.config.auth.deinit(provider.allocator);
 
     var module_it = provider.config.modules.valueIterator();
@@ -192,6 +228,8 @@ pub fn loadFromEnviron(provider: *ConfigProvider, environ_map: *std.process.Envi
 }
 
 pub fn loadFromIo(provider: *ConfigProvider, init: std.process.Init) Error!void {
+    errdefer provider.deinit();
+
     const config_path: ?[]const u8 = blk: {
         var args = init.minimal.args.iterate();
 
@@ -229,6 +267,12 @@ pub fn loadFromIo(provider: *ConfigProvider, init: std.process.Init) Error!void 
     if (kdl_source) |source| try provider.loadFromKdlSource(source);
 
     try provider.loadFromEnviron(init.environ_map);
+
+    // Initialize default server roles if none are specified
+    if (provider.config.serve.size == 0) {
+        try provider.config.serve.put(provider.allocator, default_api_ui_config.http_port, default_api_ui_config);
+        try provider.config.serve.put(provider.allocator, default_collector_config.http_port, default_collector_config);
+    }
 }
 
 pub fn loadFromKdlSource(provider: *ConfigProvider, kdl_source: []const u8) Error!void {
@@ -378,14 +422,6 @@ fn parseKdlAuthNode(provider: *ConfigProvider, doc: *const kdl.Document, node: k
             log.err("Missing config in auth block {s}", .{auth_name});
             return Error.ConfigParseError;
         },
-        .login_url = login_url orelse {
-            log.err("Missing login_url in auth block {s}", .{auth_name});
-            return Error.ConfigParseError;
-        },
-        .logout_url = logout_url orelse {
-            log.err("Missing logout_url in auth block {s}", .{auth_name});
-            return Error.ConfigParseError;
-        },
         .strategy = strategy,
     };
 
@@ -523,67 +559,109 @@ fn parseKdlRoot(provider: *ConfigProvider, doc: *const kdl.Document) Error!void 
 }
 
 fn parseKdlServeNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
-    provider.config.serve = .{
-        .api = null,
-        .collector = null,
-    };
     var has_children = false;
+
+    var serve = ServeConfig{};
+
+    if (getIntProp(doc, node, "http_port")) |http_port| {
+        serve.http_port = std.math.cast(u16, http_port) orelse {
+            log.err("http_port must be a numeric value", .{});
+            return Error.ConfigParseError;
+        };
+    }
+
+    if (getIntProp(doc, node, "number_of_workers")) |number_of_workers| {
+        serve.number_of_workers = std.math.cast(u16, number_of_workers) orelse {
+            log.err("number_of_workers must be a numeric value", .{});
+            return Error.ConfigParseError;
+        };
+    }
 
     var child_iter = doc.childIterator(node);
     while (child_iter.next()) |child| {
-        try provider.parseKdlServeVariantNode(doc, child);
+        try provider.parseKdlServeRoleNode(doc, child, &serve.roles);
         has_children = true;
     }
 
     if (!has_children) {
+        log.err("serve node must have at least one role", .{});
         return Error.ConfigParseError;
     }
+
+    try provider.config.serve.put(provider.allocator, serve.http_port, serve);
 }
 
-fn parseKdlServeVariantNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle) Error!void {
+fn parseKdlServeRoleNode(provider: *ConfigProvider, doc: *const kdl.Document, node: kdl.NodeHandle, roles: *ServeConfig.Roles) Error!void {
     const nodeType = enum {
         api,
         collector,
+        ui,
     };
 
     const node_type = std.meta.stringToEnum(
         nodeType,
         doc.getString(doc.nodes.getName(node)),
     ) orelse {
-        log.err("Unknown serve type: {s}", .{doc.getString(doc.nodes.getName(node))});
+        log.err("Unknown serve role: {s}", .{doc.getString(doc.nodes.getName(node))});
         return Error.ConfigParseError;
     };
 
-    const number_of_workers: usize = if (getIntProp(doc, node, "number_of_workers")) |p|
-        std.math.cast(u16, p) orelse return Error.ConfigParseError
-    else
-        default_number_of_workers_per_server;
-
-    const http_port: ?u16 = if (getIntProp(doc, node, "http_port")) |p|
-        std.math.cast(u16, p) orelse return Error.ConfigParseError
-    else
-        null;
-
-    const authorizer_name = getStringProp(doc, node, "auth") orelse null;
+    const authorizer_name = getStringProp(doc, node, "auth");
 
     switch (node_type) {
         .api => {
-            provider.config.serve.api = .{
-                .number_of_workers = number_of_workers,
-                .authorizer = authorizer_name,
-            };
-            if (http_port) |hp| {
-                provider.config.serve.api.?.http_port = hp;
-            }
+            roles.api = .{ .authorizer_name = authorizer_name, .inner = .{ .api = .{} } };
+            provider.config.ensure_indices = true;
         },
         .collector => {
-            provider.config.serve.collector = .{
-                .number_of_workers = number_of_workers,
-                .authorizer = authorizer_name,
-            };
-            if (http_port) |hp| {
-                provider.config.serve.collector.?.http_port = hp;
+            roles.collector = .{ .authorizer_name = authorizer_name, .inner = .{ .collector = .{} } };
+            provider.config.ensure_indices = true;
+        },
+        .ui => {
+            // TODO(2026-09-11, Max Bolotin): Pyramid of doom!
+            var ui_role_config = ServeConfig.RoleConfig{ .authorizer_name = authorizer_name, .inner = .{ .ui = .{} } };
+            var child_it = doc.childIterator(node);
+            while (child_it.next()) |child| {
+                const childType = enum {
+                    login_url,
+                    logout_url,
+                    api_url,
+                };
+
+                const child_name = doc.getString(doc.nodes.getName(child));
+                const child_type = std.meta.stringToEnum(childType, child_name) orelse {
+                    log.err("Unknown config parameter for role {s}: {s}:", .{ @tagName(node_type), child_name });
+                    return Error.ConfigParseError;
+                };
+
+                switch (child_type) {
+                    .api_url => {
+                        if (getStringArg(doc, child, 0)) |value| {
+                            ui_role_config.inner.ui.api_url = value;
+                        } else {
+                            log.err("Missing argument value for role option {s}.{s}", .{ @tagName(node_type), @tagName(child_type) });
+                            return Error.ConfigParseError;
+                        }
+                    },
+                    .login_url => {
+                        if (getStringArg(doc, child, 0)) |value| {
+                            ui_role_config.inner.ui.login_url = value;
+                        } else {
+                            log.err("Missing argument value for role option {s}.{s}", .{ @tagName(node_type), @tagName(child_type) });
+                            return Error.ConfigParseError;
+                        }
+                    },
+                    .logout_url => {
+                        if (getStringArg(doc, child, 0)) |value| {
+                            ui_role_config.inner.ui.logout_url = value;
+                        } else {
+                            log.err("Missing argument value for role option {s}.{s}", .{ @tagName(node_type), @tagName(child_type) });
+                            return Error.ConfigParseError;
+                        }
+                    },
+                }
             }
+            roles.ui = ui_role_config;
         },
     }
 }

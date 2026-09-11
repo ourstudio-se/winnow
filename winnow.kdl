@@ -1,11 +1,20 @@
-serve {
-  collector http_port="9999"
+serve http_port="8080" {
   api auth="winnow-sample-auth"
 }
 
+serve http_port="3020" {
+  ui {
+    login_url "http://localhost:3005/login?return_to={winnow_return_url}"
+    logout_url "http://localhost:3005/logout"
+    api_url "http://localhost:8080"
+  }
+}
+
+serve http_port="9999" {
+  collector
+}
+
 auth name="winnow-sample-auth" {
-  login_url "http://localhost:3005/login?return_to={winnow_return_url}"
-  logout_url "http://localhost:3005/logout"
 
   strategy "cookie"
   cookie_name "jwt"

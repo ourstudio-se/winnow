@@ -3,8 +3,10 @@ const ConfigProvider = @import("config.zig");
 const HttpClient = quickwit_mod.HttpClient;
 const Module = @import("server/module.zig");
 const Quickwit = quickwit_mod.Quickwit;
+const Role = @import("server/role.zig");
 const Server = @import("server/server.zig");
 const api = @import("api.zig");
+const auth = @import("server/auth.zig");
 const http = std.http;
 const index_schema = @import("index_schema.zig");
 const ingest = @import("ingest.zig");
@@ -83,6 +85,37 @@ fn ensureOrValidateIndex(
     }
 }
 
+fn createAuthorizer(authorizer_cfg: ConfigProvider.AuthConfig, allocator: std.mem.Allocator) !auth.Authorizer {
+    switch (authorizer_cfg.inner_config) {
+        .module => |auth_module_cfg| {
+            const module = modules.getPtr(auth_module_cfg.module_name) orelse {
+                return error.AuthMissingModule;
+            };
+            if (module.ffi.onAuth == null) {
+                return error.AuthModuleMissingHook;
+            }
+            return try module.getAuthorizer(authorizer_cfg.strategy, allocator);
+        },
+    }
+}
+
+fn createRole(config: *const ConfigProvider.Config, role_cfg: ConfigProvider.ServeConfig.RoleConfig, allocator: std.mem.Allocator) !Role {
+    const authorizer_name = role_cfg.authorizer_name;
+    const authorizer = if (authorizer_name) |name| blk: {
+        const authorizer_cfg = config.auth.get(name) orelse {
+            std.log.err("Referenced authorizer is not configured: {s}", .{name});
+            return error.MissingAuthorizer;
+        };
+        break :blk try createAuthorizer(authorizer_cfg, allocator);
+    } else null;
+
+    return switch (role_cfg.inner) {
+        .ui => |ui_inner| (try Role.UIRole.create(authorizer, ui_inner, allocator)).interface,
+        .api => Role.ApiRole.init(authorizer).interface,
+        .collector => Role.CollectorRole.init(authorizer).interface,
+    };
+}
+
 pub fn main(init: std.process.Init) !void {
     // init.gpa is leak-checked in Debug builds; init.io is a thread-pool-backed
     // Io implementation shared by the whole process.
@@ -106,7 +139,7 @@ pub fn main(init: std.process.Init) !void {
         servers_by_port.deinit(allocator);
         defer modules.deinit(allocator);
 
-        std.log.debug("deiniting config provider", .{});
+        std.log.info("deiniting config provider", .{});
         provider.deinit();
     }
 
@@ -120,7 +153,8 @@ pub fn main(init: std.process.Init) !void {
 
     // Determine serving topology from config
     const serve = cfg.serve;
-    if (serve.collector == null and serve.api == null) {
+
+    if (serve.size == 0) {
         std.log.err("no serve components enabled", .{});
         return error.NoComponentsEnabled;
     }
@@ -129,8 +163,8 @@ pub fn main(init: std.process.Init) !void {
     const client = HttpClient.init(&http_client);
     const qw = Quickwit.init(client, cfg.quickwit_url);
 
-    // Only validate indices when non-static services are served
-    if (serve.collector != null or serve.api != null) {
+    // Only validate indices when non-ui roles are served
+    if (cfg.ensure_indices) {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
 
@@ -167,47 +201,35 @@ pub fn main(init: std.process.Init) !void {
         try modules.put(allocator, module_cfg.name, module);
     }
 
-    if (serve.api) |serve_api_cfg| {
-        const authorizer_cfg_ptr = if (serve_api_cfg.authorizer) |authorizer_name| cfg.auth.getPtr(authorizer_name) orelse {
-            std.log.err("Authorizer {s} not found\n", .{authorizer_name});
-            return error.MissingAuthorizer;
-        } else null;
-        const server = try Server.create(allocator, io, .{
-            .indices = indices,
-            .number_of_workers = serve_api_cfg.number_of_workers,
-            .port = serve_api_cfg.http_port,
-            .quickwit_url = cfg.quickwit_url,
-            .roles = .{ .api = true },
-            .authorizers = .{ .api = authorizer_cfg_ptr },
-            .modules = &modules,
-        });
-        try servers_by_port.put(allocator, serve_api_cfg.http_port, server);
-    }
+    var serve_it = serve.valueIterator();
+    while (serve_it.next()) |serve_cfg| {
+        var roles: Server.Roles = .{};
 
-    if (serve.collector) |serve_collector_cfg| {
-        if (servers_by_port.contains(serve_collector_cfg.http_port)) {
-            // TODO(2026-04-06, Max Bolotin): We probably want to implement port sharing at some point,
-            // but we want to do it right - no kernel level random "load balancing". The right abstraction
-            // is likely multiple queues/worker groups per server. A later problem.
-
-            std.log.err("Config error: Sharing of the same port number between services is currently forbidden!", .{});
-            return;
+        if (serve_cfg.roles.api) |role_cfg| {
+            roles.api = try createRole(&cfg, role_cfg, allocator);
         }
 
-        const authorizer_cfg_ptr = if (serve_collector_cfg.authorizer) |authorizer_name| cfg.auth.getPtr(authorizer_name) orelse {
-            std.log.err("Authorizer {s} not found\n", .{authorizer_name});
-            return error.MissingAuthorizer;
-        } else null;
-        const server = try Server.create(allocator, io, .{
-            .indices = indices,
-            .number_of_workers = serve_collector_cfg.number_of_workers,
-            .port = serve_collector_cfg.http_port,
-            .quickwit_url = cfg.quickwit_url,
-            .roles = .{ .collector = true },
-            .authorizers = .{ .collector = authorizer_cfg_ptr },
-            .modules = &modules,
-        });
-        try servers_by_port.put(allocator, serve_collector_cfg.http_port, server);
+        if (serve_cfg.roles.collector) |role_cfg| {
+            roles.collector = try createRole(&cfg, role_cfg, allocator);
+        }
+
+        if (serve_cfg.roles.ui) |role_cfg| {
+            roles.ui = try createRole(&cfg, role_cfg, allocator);
+        }
+
+        const server = try Server.create(
+            allocator,
+            io,
+            .{
+                .indices = indices,
+                .number_of_workers = serve_cfg.number_of_workers,
+                .port = serve_cfg.http_port,
+                .quickwit_url = cfg.quickwit_url,
+            },
+            roles,
+        );
+
+        try servers_by_port.put(allocator, serve_cfg.http_port, server);
     }
 
     var group: std.Io.Group = .init;
