@@ -275,6 +275,7 @@ pub fn loadFromIo(provider: *ConfigProvider, init: std.process.Init) Error!void 
     if (provider.config.serve.size == 0) {
         try provider.config.serve.put(provider.allocator, default_api_ui_config.http_port, default_api_ui_config);
         try provider.config.serve.put(provider.allocator, default_collector_config.http_port, default_collector_config);
+        provider.config.ensure_indices = true;
     }
 }
 
