@@ -16,7 +16,7 @@ const Worker = @This();
 
 pub const Context = struct {
     arena: std.mem.Allocator,
-    http_client: std.http.Client,
+    http_client: *std.http.Client,
     qw: Quickwit,
 };
 
@@ -51,7 +51,7 @@ pub fn run(worker: *Worker) void {
 
     const ctx: Context = .{
         .arena = arena.allocator(),
-        .http_client = http_client,
+        .http_client = &http_client,
         .qw = qw,
     };
 

@@ -82,7 +82,7 @@ pub const UIRole = struct {
 
     pub fn route(
         user_data: *const anyopaque,
-        worker: *Worker,
+        _: *Worker,
         req: *std.http.Server.Request,
         ctx: Worker.Context,
     ) void {
@@ -113,7 +113,7 @@ pub const UIRole = struct {
             .@"*" => {
                 if (std.mem.startsWith(u8, req.head.target, "/api/")) {
                     if (ui_role.config.api_url) |api_url| {
-                        proxy.proxy(worker.server.io, ctx.arena, req, api_url) catch |err| {
+                        proxy.proxy(ctx.http_client, ctx.arena, req, api_url) catch |err| {
                             log.err("proxying request: {}", .{err});
                         };
                     } else {
@@ -121,7 +121,6 @@ pub const UIRole = struct {
                     }
                 } else {
                     if (!requireHttpMethod(req, &.{.GET})) {
-                        http_errors.sendNotFound(req);
                         return;
                     }
 
@@ -184,7 +183,6 @@ pub const CollectorRole = GenericRole(struct {
         ctx: Worker.Context,
     ) void {
         if (!requireHttpMethod(req, &.{.POST})) {
-            http_errors.sendNotFound(req);
             return;
         }
 
