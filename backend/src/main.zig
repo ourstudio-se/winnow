@@ -208,14 +208,17 @@ pub fn main(init: std.process.Init) !void {
         if (serve_cfg.roles.api) |role_cfg| {
             roles.api = try createRole(&cfg, role_cfg, allocator);
         }
+        errdefer if (roles.api) |api_role| api_role.destroy(allocator);
 
         if (serve_cfg.roles.collector) |role_cfg| {
             roles.collector = try createRole(&cfg, role_cfg, allocator);
         }
+        errdefer if (roles.collector) |collector_role| collector_role.destroy(allocator);
 
         if (serve_cfg.roles.ui) |role_cfg| {
             roles.ui = try createRole(&cfg, role_cfg, allocator);
         }
+        errdefer if (roles.ui) |ui_role| ui_role.destroy(allocator);
 
         const server = try Server.create(
             allocator,
