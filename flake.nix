@@ -160,6 +160,15 @@
 
             meta.mainProgram = "winnow";
           }).overrideAttrs (old: {
+            # zig2nix's package wrapper takes glibc/musl as callPackage args
+            # (for -Ddynamic-linker on zig < 0.16) but forgets to strip them
+            # from the derivation attrs. On linux they silently evaluate; on
+            # darwin derivationStrict refuses to evaluate glibc (meta.platforms
+            # is linux-only), breaking every zig2nix package. Null attrs are
+            # dropped by mkDerivation (__ignoreNulls).
+            glibc = null;
+            musl = null;
+
             # Swap zig2nix's broken dependency derivation for our fixed one
             # (see fetchZigDep above). Both attrs reference the old one, so both
             # must be replaced or nix still tries to build it.
