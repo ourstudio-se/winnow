@@ -123,6 +123,70 @@ layer — the swap would be transparent to the frontend and external consumers.
 | **VictoriaMetrics** | S3/object storage is enterprise-only |
 | **InfluxDB** | Own ecosystem baggage, licensing churn |
 
+## General-Purpose Metrics (Deferred — September 2026)
+
+We evaluated adding an optional metrics module for general time-series data
+(host metrics, request latencies, etc.). **Decision: hold off until Quickwit's
+upstream metrics engine matures. We stay all-in on Quickwit.**
+
+### Why the current Quickwit engine can't back this
+The servicegraph-metrics-on-Quickwit approach above works because that data is
+low-cardinality, fixed-schema, and pre-aggregated. General metrics violate all
+three assumptions, and the tantivy-based engine breaks on:
+- **Storage economics** — a metric point is ~16 bytes of information; stored as
+  a document it re-carries its full label set through index structures built
+  for text search. A real TSDB sorts by series and delta-encodes (1–2
+  bytes/sample) — a 10–100x difference in storage and scan volume.
+- **Query model** — no timeseries concept; every panel refresh reconstructs
+  series via terms + date_histogram aggregations (scatter-gather over all
+  splits, terms-agg memory blowup at high cardinality). No `rate()`,
+  counter-reset handling, staleness, or cross-series joins.
+- **Access pattern** — relentless small writes across all series plus
+  high-frequency reads of the leading edge; Quickwit's commit cadence, split
+  merging, and caching are tuned for bursty log batches.
+
+The GreptimeDB-style "unified event model materialized into metrics on demand"
+doesn't transfer: unification there happens at the query layer, but the
+physical engine underneath is series-sorted columnar storage. Sort order is
+the whole game; it can't be faked over inverted-index splits.
+
+### What Quickwit upstream is building (verified September 2026)
+Quickwit (post-Datadog acquisition) is building a **second, parallel storage
+engine specifically for metrics** — effectively rebuilding Datadog's internal
+"Husky" store in the OSS repo (the ADRs reference Husky conventions and phases
+directly; the repo's evolution doc names metrics as the current priority
+signal):
+- Crates: `quickwit-parquet-engine`, `quickwit-datafusion`, `quickwit-df-core`,
+  `quickwit-compaction`; OTLP metrics receiver
+  (`quickwit-opentelemetry/src/otlp/arrow_metrics.rs`)
+- Design: OTLP → Arrow RecordBatch → `timeseries_id` assignment → Parquet
+  splits sorted by `metric_name|tags|timestamp` with page-level stats and
+  zonemaps → DataFusion query layer with page pruning → time-windowed sorted
+  compaction. A textbook columnar TSDB.
+- ADRs: `docs/internals/adr/001-parquet-data-model.md`,
+  `002-sort-schema-parquet-splits.md`, `003-time-windowed-sorted-compaction.md`
+
+**Not consumable yet** (as of September 2026): ADR-002 status "Proposed"; no
+PromQL anywhere; no SQL/metrics query endpoint in `quickwit-serve` (DataFusion
+layer is internal); no user-facing docs; gaps ledger lists no per-point dedup,
+no multi-level caching, no leading-edge prioritization. Unclear whether any of
+it is usable in v0.9.0 (July 2026).
+
+### Alternatives evaluated for an interim backend (rejected — we wait instead)
+| Option | Notes |
+|---|---|
+| **VictoriaMetrics** | Best mature single-binary option (Apache-2.0, native OTLP), but OSS is local-disk only — and it's a second storage dependency |
+| **GreptimeDB** | Best architectural fit (single binary, OTLP-native, S3/GCS/Azure in OSS), but young — and a second storage dependency |
+| **Prometheus 3.x as push sink** | Boring and solid (native OTLP ingest), but local-disk, single-node, no retention story |
+| **ClickHouse** | Would compete with the Quickwit decision rather than complement it |
+
+### Adoption criteria (revisit when all hold)
+- OTLP metrics ingest wired end-to-end in a tagged Quickwit release
+- A public, stable query surface (DataFusion SQL or PromQL over HTTP)
+- User-facing documentation / config for metrics indexes
+When that lands, the metrics module translates `queryMetrics` into that API and
+the deploy story stays "point at Quickwit and go."
+
 ## Frontend
 
 ### Stack

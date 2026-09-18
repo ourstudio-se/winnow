@@ -41,3 +41,12 @@ Polish, alerting, multi-tenancy groundwork.
 - [ ] Usage-based billing hooks
 - [ ] Public documentation
 - [ ] Landing page
+
+## Deferred / Watching
+
+- [ ] General-purpose metrics sink (host metrics, request latencies) — **on
+  hold** until Quickwit's in-progress parquet/DataFusion metrics engine ships a
+  public OTLP-metrics ingest + query API in a tagged release. We stay all-in on
+  Quickwit rather than adding a second TSDB (VictoriaMetrics/GreptimeDB were
+  evaluated and rejected as interim backends). Adoption criteria and full
+  rationale: ARCHITECTURE.md "General-Purpose Metrics (Deferred)".
